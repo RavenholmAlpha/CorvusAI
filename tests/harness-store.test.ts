@@ -66,6 +66,15 @@ function withAccessor(counter: { count: number }): Record<string, unknown> {
   return value;
 }
 
+function withProtoKey(): Record<string, unknown> {
+  const value: Record<string, unknown> = { stable: "original" };
+  Object.defineProperty(value, "__proto__", {
+    value: { marker: "normal key" },
+    enumerable: true,
+  });
+  return value;
+}
+
 function captureError(action: () => unknown): Error | undefined {
   try {
     action();
@@ -231,6 +240,105 @@ describe("durable harness stores", () => {
       snapshotsBefore,
     );
     expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+  });
+
+  it("persists own __proto__ data keys without mutating prototypes", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "__proto__ key", model: "test-model", endpoint: "https://example.test/v1" });
+
+    const event = events.append("json.proto_key", withProtoKey(), run.id);
+    const persistedEvent = db.prepare("select payload_json from events where id = ?").get(event.id) as {
+      payload_json: string;
+    };
+    const parsedEvent = JSON.parse(persistedEvent.payload_json) as Record<string, unknown>;
+
+    expect(Object.prototype.hasOwnProperty.call(parsedEvent, "__proto__")).toBe(true);
+    expect(parsedEvent["__proto__"]).toEqual({ marker: "normal key" });
+    expect(Object.getPrototypeOf(parsedEvent)).toBe(Object.prototype);
+    expect(Object.prototype).not.toHaveProperty("marker");
+    expect(event.payload).toEqual(parsedEvent);
+
+    const snapshot = runs.writeSnapshot(run.id, withProtoKey());
+    const persistedSnapshot = db.prepare("select snapshot_json from state_snapshots where id = ?").get(snapshot.id) as {
+      snapshot_json: string;
+    };
+    const parsedSnapshot = JSON.parse(persistedSnapshot.snapshot_json) as Record<string, unknown>;
+
+    expect(Object.prototype.hasOwnProperty.call(parsedSnapshot, "__proto__")).toBe(true);
+    expect(parsedSnapshot["__proto__"]).toEqual({ marker: "normal key" });
+    expect(Object.getPrototypeOf(parsedSnapshot)).toBe(Object.prototype);
+    expect(Object.prototype).not.toHaveProperty("marker");
+    expect(snapshot.snapshot).toEqual(parsedSnapshot);
+  });
+
+  it("ignores inherited Object.prototype.toJSON while persisting payloads and snapshots", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "object prototype toJSON", model: "test-model", endpoint: "https://example.test/v1" });
+    const descriptor = Object.getOwnPropertyDescriptor(Object.prototype, "toJSON");
+
+    try {
+      Object.defineProperty(Object.prototype, "toJSON", {
+        configurable: true,
+        value: () => ({ rewritten: true }),
+      });
+
+      const event = events.append("json.object_prototype", { stable: "original" }, run.id);
+      const persistedEvent = db.prepare("select payload_json from events where id = ?").get(event.id) as {
+        payload_json: string;
+      };
+
+      expect(JSON.parse(persistedEvent.payload_json)).toEqual({ stable: "original" });
+      expect(event.payload).toEqual({ stable: "original" });
+
+      const snapshot = runs.writeSnapshot(run.id, { stable: "original" });
+      const persistedSnapshot = db.prepare("select snapshot_json from state_snapshots where id = ?").get(snapshot.id) as {
+        snapshot_json: string;
+      };
+
+      expect(JSON.parse(persistedSnapshot.snapshot_json)).toEqual({ stable: "original" });
+      expect(snapshot.snapshot).toEqual({ stable: "original" });
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(Object.prototype, "toJSON", descriptor);
+      } else {
+        delete (Object.prototype as { toJSON?: unknown }).toJSON;
+      }
+    }
+  });
+
+  it("ignores inherited Array.prototype.toJSON while persisting arrays", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "array prototype toJSON", model: "test-model", endpoint: "https://example.test/v1" });
+    const descriptor = Object.getOwnPropertyDescriptor(Array.prototype, "toJSON");
+
+    try {
+      Object.defineProperty(Array.prototype, "toJSON", {
+        configurable: true,
+        value: () => ["rewritten"],
+      });
+
+      const event = events.append("json.array_prototype", { items: ["original"] }, run.id);
+      const persistedEvent = db.prepare("select payload_json from events where id = ?").get(event.id) as {
+        payload_json: string;
+      };
+
+      expect(JSON.parse(persistedEvent.payload_json)).toEqual({ items: ["original"] });
+      expect(event.payload).toEqual({ items: ["original"] });
+
+      const snapshot = runs.writeSnapshot(run.id, ["original"]);
+      const persistedSnapshot = db.prepare("select snapshot_json from state_snapshots where id = ?").get(snapshot.id) as {
+        snapshot_json: string;
+      };
+
+      expect(JSON.parse(persistedSnapshot.snapshot_json)).toEqual(["original"]);
+      expect(snapshot.snapshot).toEqual(["original"]);
+    } finally {
+      if (descriptor) {
+        Object.defineProperty(Array.prototype, "toJSON", descriptor);
+      } else {
+        delete (Array.prototype as { toJSON?: unknown }).toJSON;
+      }
+    }
   });
 
   it("creates, lists, and updates runs with camelCase row fields and lifecycle events", async () => {

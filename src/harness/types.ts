@@ -166,13 +166,18 @@ function normalizeDurableJsonObjectLike(value: object, path: string, seen: WeakS
     const descriptors = Object.getOwnPropertyDescriptors(value);
     rejectUnsafeOwnProperties(value, descriptors, path);
 
-    const normalized: JsonObject = {};
+    const normalized = Object.create(null) as JsonObject;
     for (const key of Object.keys(descriptors)) {
       const descriptor = descriptors[key];
       if (!descriptor?.enumerable) {
         continue;
       }
-      normalized[key] = normalizeDurableJsonValue(descriptor.value, childPath(path, key), seen);
+      Object.defineProperty(normalized, key, {
+        value: normalizeDurableJsonValue(descriptor.value, childPath(path, key), seen),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     }
     return normalized;
   } finally {
@@ -196,7 +201,8 @@ function normalizeDurableJsonArray(value: unknown[], path: string, seen: WeakSet
     }
   }
 
-  const normalized: JsonArray = [];
+  const normalized = [] as JsonArray;
+  Object.setPrototypeOf(normalized, null);
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[String(index)];
     if (!descriptor) {
@@ -205,7 +211,12 @@ function normalizeDurableJsonArray(value: unknown[], path: string, seen: WeakSet
     if ("get" in descriptor || "set" in descriptor) {
       throw unsupportedDurableJsonValue(`${path}[${index}]`, "accessor properties are not valid JSON");
     }
-    normalized[index] = normalizeDurableJsonValue(descriptor.value, `${path}[${index}]`, seen);
+    Object.defineProperty(normalized, index, {
+      value: normalizeDurableJsonValue(descriptor.value, `${path}[${index}]`, seen),
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return normalized;
 }
