@@ -2,7 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join, resolve } from "node:path";
 import type { CommandDefinition } from "./commands.js";
-import type { ToolDefinition, ToolRegistry } from "./tools/index.js";
+import type { RegisterableTool, ToolRegistry } from "./tools/index.js";
 
 export interface PluginManifest {
   name: string;
@@ -18,7 +18,7 @@ export interface LoadedPlugin {
 }
 
 export interface PluginApi {
-  registerTool: (tool: ToolDefinition) => void;
+  registerTool: (tool: RegisterableTool) => void;
   registerCommand?: (command: CommandDefinition) => void;
 }
 

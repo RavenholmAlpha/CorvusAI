@@ -1,5 +1,5 @@
 import { Ajv, type ValidateFunction } from "ajv";
-import { serializeDurableJson } from "../harness/types.js";
+import { serializeDurableJson } from "../json.js";
 import type { JsonObject, JsonSchema } from "../types.js";
 import type { ToolManifest, ToolRunResult } from "./protocol.js";
 

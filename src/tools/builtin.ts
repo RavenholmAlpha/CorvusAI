@@ -134,6 +134,7 @@ export function createBuiltInToolManifests(): ToolManifest[] {
         const result = await execFileAsync(shell, args, {
           cwd: cwd ?? context.cwd,
           timeout: Number(timeoutMs ?? context.timeoutMs),
+          signal: context.signal,
           maxBuffer: 1024 * 1024,
         });
         return { ok: true, output: { stdout: result.stdout, stderr: result.stderr } };

@@ -10,7 +10,7 @@ import {
   type ToolRisk,
   type ToolRunResult,
 } from "./protocol.js";
-import { isToolRunResult, normalizeToolResult, validateToolInput } from "./validation.js";
+import { normalizeToolResult, validateToolInput } from "./validation.js";
 
 export { createBuiltInToolManifests } from "./builtin.js";
 export * from "./protocol.js";
@@ -21,7 +21,7 @@ export interface ToolDefinition<TInput extends JsonObject = JsonObject, TResult 
   description: string;
   capability: string;
   parameters: JsonSchema;
-  execute: (input: TInput) => Promise<TResult> | TResult;
+  execute: (input: TInput, context?: ToolExecutionContext) => Promise<TResult> | TResult;
   namespace?: string;
   version?: string;
   risk?: ToolRisk;
@@ -106,8 +106,7 @@ export class ToolRegistry {
     }
 
     const validatedInput = validateToolInput(tool, input);
-    const result = await tool.execute(validatedInput, createExecutionContext(tool, context));
-    const normalized = normalizeToolResult(result);
+    const normalized = await executeToolManifest(tool, validatedInput, context);
     if (!normalized.ok) {
       throw new Error(normalized.error);
     }
@@ -115,8 +114,8 @@ export class ToolRegistry {
   }
 }
 
-export function createBuiltInTools(): ToolManifest[] {
-  return createBuiltInToolManifests();
+export function createBuiltInTools(): ToolDefinition[] {
+  return createBuiltInToolManifests().map((manifest) => toLegacyToolDefinition(manifest));
 }
 
 function toToolManifest(tool: RegisterableTool): ToolManifest {
@@ -137,7 +136,7 @@ function toToolManifest(tool: RegisterableTool): ToolManifest {
     concurrency: tool.concurrency ?? { ...DEFAULT_CONCURRENCY },
     evidencePolicy: tool.evidencePolicy ?? "summary",
     resources: tool.resources ?? [],
-    execute: async (input) => toToolRunResult(await tool.execute(input)),
+    execute: async (input, context) => ({ ok: true, output: await tool.execute(input, context) }),
   });
 }
 
@@ -145,25 +144,96 @@ function isToolManifest(tool: RegisterableTool): tool is ToolManifest {
   return typeof (tool as Partial<ToolManifest>).toOpenAITool === "function";
 }
 
-function toToolRunResult(result: unknown): ToolRunResult {
-  if (isToolRunResult(result)) {
-    return result;
+async function executeToolManifest(
+  tool: ToolManifest,
+  input: JsonObject,
+  overrides: Partial<ToolExecutionContext>,
+): Promise<ToolRunResult> {
+  const execution = createExecutionContext(tool, overrides);
+  const timeoutMs = Math.max(0, execution.context.timeoutMs);
+  const timeoutError = new Error(`Tool ${tool.name} timed out after ${timeoutMs}ms`);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const timeout = new Promise<ToolRunResult>((_, reject) => {
+    timer = setTimeout(() => {
+      timedOut = true;
+      execution.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
+
+  try {
+    const result = await Promise.race([Promise.resolve(tool.execute(input, execution.context)), timeout]);
+    if (timedOut) {
+      throw timeoutError;
+    }
+    return normalizeToolResult(result);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+    execution.cleanup();
   }
-  return { ok: true, output: result };
+}
+
+function toLegacyToolDefinition(tool: ToolManifest): ToolDefinition {
+  return {
+    name: tool.name,
+    description: tool.description,
+    capability: tool.capability,
+    parameters: tool.parameters,
+    namespace: tool.namespace,
+    version: tool.version,
+    risk: tool.risk,
+    timeoutMs: tool.timeoutMs,
+    outputLimitBytes: tool.outputLimitBytes,
+    concurrency: tool.concurrency,
+    evidencePolicy: tool.evidencePolicy,
+    resources: tool.resources,
+    execute: async (input, context) => {
+      const result = await executeToolManifest(tool, input, context ?? {});
+      if (!result.ok) {
+        throw new Error(result.error);
+      }
+      return result.output;
+    },
+  };
 }
 
 function createExecutionContext(
   tool: ToolManifest,
   overrides: Partial<ToolExecutionContext>,
-): ToolExecutionContext {
+): { context: ToolExecutionContext; abort: (reason: Error) => void; cleanup: () => void } {
   const controller = new AbortController();
-  return {
+  const callerSignal = overrides.signal;
+  let removeCallerAbortListener: (() => void) | undefined;
+
+  if (callerSignal?.aborted) {
+    controller.abort(callerSignal.reason);
+  } else if (callerSignal) {
+    const abortFromCaller = () => controller.abort(callerSignal.reason);
+    callerSignal.addEventListener("abort", abortFromCaller, { once: true });
+    removeCallerAbortListener = () => callerSignal.removeEventListener("abort", abortFromCaller);
+  }
+
+  const context = {
     runId: overrides.runId ?? "local",
     toolCallId: overrides.toolCallId ?? `local_${tool.name}`,
-    signal: overrides.signal ?? controller.signal,
+    signal: controller.signal,
     cwd: overrides.cwd ?? process.cwd(),
     timeoutMs: overrides.timeoutMs ?? tool.timeoutMs,
     outputLimitBytes: overrides.outputLimitBytes ?? tool.outputLimitBytes,
+  };
+
+  return {
+    context,
+    abort: (reason) => {
+      if (!controller.signal.aborted) {
+        controller.abort(reason);
+      }
+    },
+    cleanup: () => removeCallerAbortListener?.(),
   };
 }
 
