@@ -1,11 +1,20 @@
-import { execFile } from "node:child_process";
-import { readdir, readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { promisify } from "node:util";
 import { decidePermission, type PermissionDecision, type PermissionPolicy } from "../permissions.js";
 import type { JsonObject, JsonSchema, OpenAIToolSchema } from "../types.js";
+import { createBuiltInToolManifests } from "./builtin.js";
+import {
+  createToolManifest,
+  type EvidencePolicy,
+  type ToolConcurrency,
+  type ToolExecutionContext,
+  type ToolManifest,
+  type ToolRisk,
+  type ToolRunResult,
+} from "./protocol.js";
+import { isToolRunResult, normalizeToolResult, validateToolInput } from "./validation.js";
 
-const execFileAsync = promisify(execFile);
+export { createBuiltInToolManifests } from "./builtin.js";
+export * from "./protocol.js";
+export * from "./validation.js";
 
 export interface ToolDefinition<TInput extends JsonObject = JsonObject, TResult = unknown> {
   name: string;
@@ -13,18 +22,32 @@ export interface ToolDefinition<TInput extends JsonObject = JsonObject, TResult 
   capability: string;
   parameters: JsonSchema;
   execute: (input: TInput) => Promise<TResult> | TResult;
+  namespace?: string;
+  version?: string;
+  risk?: ToolRisk;
+  timeoutMs?: number;
+  outputLimitBytes?: number;
+  concurrency?: ToolConcurrency;
+  evidencePolicy?: EvidencePolicy;
+  resources?: string[];
 }
 
+export type RegisterableTool = ToolDefinition | ToolManifest;
+
 export interface ToolPermissionPrompt {
-  tool: ToolDefinition;
+  tool: ToolManifest;
   input: JsonObject;
   decision: PermissionDecision;
 }
 
 export type PermissionRequester = (prompt: ToolPermissionPrompt) => Promise<boolean>;
 
+const DEFAULT_TIMEOUT_MS = 30000;
+const DEFAULT_OUTPUT_LIMIT_BYTES = 20000;
+const DEFAULT_CONCURRENCY: ToolConcurrency = { perTool: 1, perRun: 1, global: 1 };
+
 export class ToolRegistry {
-  private readonly tools = new Map<string, ToolDefinition>();
+  private readonly tools = new Map<string, ToolManifest>();
   private permissionRequester?: PermissionRequester;
 
   constructor(
@@ -38,35 +61,33 @@ export class ToolRegistry {
     this.permissionRequester = requester;
   }
 
-  register(tool: ToolDefinition): void {
+  register(tool: RegisterableTool): void {
     if (!/^[a-zA-Z0-9_-]+$/.test(tool.name)) {
       throw new Error(`Invalid tool name: ${tool.name}`);
     }
-    this.tools.set(tool.name, tool);
+    const manifest = toToolManifest(tool);
+    this.tools.set(manifest.name, manifest);
   }
 
-  registerMany(tools: ToolDefinition[]): void {
+  registerMany(tools: RegisterableTool[]): void {
     for (const tool of tools) {
       this.register(tool);
     }
   }
 
-  list(): ToolDefinition[] {
+  list(): ToolManifest[] {
     return [...this.tools.values()].sort((left, right) => left.name.localeCompare(right.name));
   }
 
   toOpenAITools(): OpenAIToolSchema[] {
-    return this.list().map((tool) => ({
-      type: "function",
-      function: {
-        name: tool.name,
-        description: tool.description,
-        parameters: tool.parameters,
-      },
-    }));
+    return this.list().map((tool) => tool.toOpenAITool());
   }
 
-  async execute(name: string, input: JsonObject): Promise<unknown> {
+  async execute(
+    name: string,
+    input: JsonObject,
+    context: Partial<ToolExecutionContext> = {},
+  ): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) {
       throw new Error(`Unknown tool: ${name}`);
@@ -84,144 +105,68 @@ export class ToolRegistry {
       }
     }
 
-    return tool.execute(input);
+    const validatedInput = validateToolInput(tool, input);
+    const result = await tool.execute(validatedInput, createExecutionContext(tool, context));
+    const normalized = normalizeToolResult(result);
+    if (!normalized.ok) {
+      throw new Error(normalized.error);
+    }
+    return normalized.output;
   }
 }
 
-export function createBuiltInTools(): ToolDefinition[] {
-  return [
-    {
-      name: "read_file",
-      description: "Read a UTF-8 text file from the workspace or an absolute path.",
-      capability: "filesystem.read",
-      parameters: objectSchema({
-        path: stringSchema("File path to read."),
-        maxBytes: numberSchema("Maximum number of bytes to return. Defaults to 12000."),
-      }, ["path"]),
-      execute: async ({ path, maxBytes = 12000 }) => {
-        const resolved = resolve(String(path));
-        const content = await readFile(resolved, "utf8");
-        const limit = Number(maxBytes);
-        return {
-          path: resolved,
-          content: content.slice(0, limit),
-          truncated: content.length > limit,
-        };
-      },
-    },
-    {
-      name: "write_file",
-      description: "Write UTF-8 text to a file, creating parent directories if needed.",
-      capability: "filesystem.write",
-      parameters: objectSchema(
-        {
-          path: stringSchema("File path to write."),
-          content: stringSchema("Text content to write."),
-        },
-        ["path", "content"],
-      ),
-      execute: async ({ path, content }) => {
-        const resolved = resolve(String(path));
-        await mkdir(dirname(resolved), { recursive: true });
-        await writeFile(resolved, String(content), "utf8");
-        return { path: resolved, bytes: Buffer.byteLength(String(content), "utf8") };
-      },
-    },
-    {
-      name: "list_dir",
-      description: "List files and directories at a path.",
-      capability: "filesystem.read",
-      parameters: objectSchema({
-        path: stringSchema("Directory path. Defaults to current working directory."),
-      }),
-      execute: async ({ path = "." }) => {
-        const resolved = resolve(String(path));
-        const entries = await readdir(resolved, { withFileTypes: true });
-        return entries.map((entry) => ({
-          name: entry.name,
-          type: entry.isDirectory() ? "directory" : "file",
-        }));
-      },
-    },
-    {
-      name: "shell",
-      description: "Run a shell command after permission approval.",
-      capability: "process",
-      parameters: objectSchema(
-        {
-          command: stringSchema("Command line to execute."),
-          cwd: stringSchema("Working directory. Defaults to current directory."),
-          timeoutMs: numberSchema("Timeout in milliseconds. Defaults to 30000."),
-        },
-        ["command"],
-      ),
-      execute: async ({ command, cwd = process.cwd(), timeoutMs = 30000 }) => {
-        const shell = process.platform === "win32" ? "powershell.exe" : "sh";
-        const args =
-          process.platform === "win32"
-            ? ["-NoProfile", "-Command", String(command)]
-            : ["-lc", String(command)];
-        const result = await execFileAsync(shell, args, {
-          cwd: String(cwd),
-          timeout: Number(timeoutMs),
-          maxBuffer: 1024 * 1024,
-        });
-        return {
-          stdout: result.stdout,
-          stderr: result.stderr,
-        };
-      },
-    },
-    {
-      name: "web_fetch",
-      description: "Fetch a URL and return status, headers, and a text preview.",
-      capability: "network",
-      parameters: objectSchema(
-        {
-          url: stringSchema("URL to fetch."),
-          method: stringSchema("HTTP method. Defaults to GET."),
-          body: stringSchema("Optional request body."),
-        },
-        ["url"],
-      ),
-      execute: async ({ url, method = "GET", body }) => {
-        const response = await fetch(String(url), {
-          method: String(method),
-          body: body === undefined ? undefined : String(body),
-        });
-        const text = await response.text();
-        return {
-          status: response.status,
-          contentType: response.headers.get("content-type"),
-          text: text.slice(0, 20000),
-          truncated: text.length > 20000,
-        };
-      },
-    },
-    {
-      name: "now",
-      description: "Return the current time in ISO-8601 format.",
-      capability: "local",
-      parameters: objectSchema({}),
-      execute: () => ({ iso: new Date().toISOString() }),
-    },
-  ];
+export function createBuiltInTools(): ToolManifest[] {
+  return createBuiltInToolManifests();
 }
 
-function objectSchema(properties: Record<string, JsonSchema>, required: string[] = []): JsonSchema {
+function toToolManifest(tool: RegisterableTool): ToolManifest {
+  if (isToolManifest(tool)) {
+    return tool;
+  }
+
+  return createToolManifest({
+    name: tool.name,
+    namespace: tool.namespace ?? defaultNamespace(tool.capability),
+    version: tool.version ?? "1.0.0",
+    description: tool.description,
+    capability: tool.capability,
+    risk: tool.risk ?? "medium",
+    parameters: tool.parameters,
+    timeoutMs: tool.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    outputLimitBytes: tool.outputLimitBytes ?? DEFAULT_OUTPUT_LIMIT_BYTES,
+    concurrency: tool.concurrency ?? { ...DEFAULT_CONCURRENCY },
+    evidencePolicy: tool.evidencePolicy ?? "summary",
+    resources: tool.resources ?? [],
+    execute: async (input) => toToolRunResult(await tool.execute(input)),
+  });
+}
+
+function isToolManifest(tool: RegisterableTool): tool is ToolManifest {
+  return typeof (tool as Partial<ToolManifest>).toOpenAITool === "function";
+}
+
+function toToolRunResult(result: unknown): ToolRunResult {
+  if (isToolRunResult(result)) {
+    return result;
+  }
+  return { ok: true, output: result };
+}
+
+function createExecutionContext(
+  tool: ToolManifest,
+  overrides: Partial<ToolExecutionContext>,
+): ToolExecutionContext {
+  const controller = new AbortController();
   return {
-    type: "object",
-    properties,
-    required,
-    additionalProperties: false,
+    runId: overrides.runId ?? "local",
+    toolCallId: overrides.toolCallId ?? `local_${tool.name}`,
+    signal: overrides.signal ?? controller.signal,
+    cwd: overrides.cwd ?? process.cwd(),
+    timeoutMs: overrides.timeoutMs ?? tool.timeoutMs,
+    outputLimitBytes: overrides.outputLimitBytes ?? tool.outputLimitBytes,
   };
 }
 
-function stringSchema(description: string): JsonSchema {
-  return { type: "string", description };
+function defaultNamespace(capability: string): string {
+  return capability.split(".")[0] || "tool";
 }
-
-function numberSchema(description: string): JsonSchema {
-  return { type: "number", description };
-}
-
