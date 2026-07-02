@@ -32,6 +32,34 @@ function tableColumns(db: CorvusDatabase, table: string): string[] {
     .map((row) => (row as { name: string }).name);
 }
 
+interface ColumnInfo {
+  name: string;
+  type: string;
+  notnull: number;
+  dflt_value: string | null;
+  pk: number;
+}
+
+function columnInfo(db: CorvusDatabase, table: string, column: string): ColumnInfo {
+  const row = db
+    .prepare(`pragma table_info(${table})`)
+    .all()
+    .find((info) => (info as { name: string }).name === column);
+
+  if (!row) {
+    throw new Error(`Missing column ${table}.${column}`);
+  }
+
+  const info = row as ColumnInfo;
+  return {
+    name: info.name,
+    type: info.type,
+    notnull: info.notnull,
+    dflt_value: info.dflt_value,
+    pk: info.pk,
+  };
+}
+
 describe("database migrations", () => {
   it("creates the durable harness schema idempotently", async () => {
     const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
@@ -148,6 +176,82 @@ describe("database migrations", () => {
     expect(reopened.prepare("select count(*) as count from schema_migrations").get()).toEqual({ count: 1 });
 
     reopened.close();
+  });
+
+  it("normalizes upgraded timestamp columns to match fresh schema defaults", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
+    roots.push(root);
+    const upgraded = openTestDatabase(join(root, "upgraded.db"));
+    const fresh = openTestDatabase(join(root, "fresh.db"));
+    const createdAt = "2026-07-02T00:00:00.000Z";
+
+    upgraded.exec(`
+      create table schema_migrations (
+        version integer primary key,
+        name text not null,
+        applied_at text not null
+      );
+
+      create table runs (
+        id text primary key,
+        status text not null,
+        goal text not null,
+        model text not null,
+        endpoint text not null,
+        created_at text not null,
+        updated_at text not null,
+        completed_at text
+      );
+
+      create table steps (
+        id text primary key,
+        run_id text not null references runs(id) on delete cascade,
+        "index" integer not null,
+        kind text not null,
+        status text not null,
+        title text not null,
+        started_at text,
+        completed_at text
+      );
+    `);
+    upgraded
+      .prepare("insert into schema_migrations (version, name, applied_at) values (?, ?, ?)")
+      .run(1, "initial durable harness schema", createdAt);
+    upgraded
+      .prepare(
+        `insert into runs
+          (id, status, goal, model, endpoint, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("run_upgrade", "created", "upgrade", "test-model", "https://example.test/v1", createdAt, createdAt);
+    upgraded
+      .prepare(
+        `insert into steps
+          (id, run_id, "index", kind, status, title, started_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("step_upgrade", "run_upgrade", 0, "model", "running", "Old step", createdAt);
+
+    ensureDatabase(upgraded);
+    ensureDatabase(upgraded);
+    ensureDatabase(fresh);
+
+    for (const [table, column] of [
+      ["schema_migrations", "created_at"],
+      ["steps", "created_at"],
+    ] as const) {
+      expect(columnInfo(upgraded, table, column)).toEqual(columnInfo(fresh, table, column));
+      expect(columnInfo(upgraded, table, column)).toMatchObject({ notnull: 1, dflt_value: null });
+    }
+    expect(upgraded.prepare("select created_at from schema_migrations where version = 1").get()).toEqual({
+      created_at: createdAt,
+    });
+    expect(upgraded.prepare("select created_at from steps where id = ?").get("step_upgrade")).toEqual({
+      created_at: createdAt,
+    });
+
+    upgraded.close();
+    fresh.close();
   });
 
   it("creates indexes for common status and creation-time queries", async () => {
