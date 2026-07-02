@@ -1,0 +1,32 @@
+{
+  "name": "corvus",
+  "version": "0.1.0",
+  "description": "Corvus AI agent harness with a cassette-futurist TUI.",
+  "type": "module",
+  "bin": {
+    "corvus": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx src/cli.ts",
+    "start": "node dist/cli.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+  },
+  "keywords": [
+    "agent",
+    "tui",
+    "openai",
+    "tools",
+    "plugins"
+  ],
+  "license": "MIT",
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^24.0.10",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
