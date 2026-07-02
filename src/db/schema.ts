@@ -4,7 +4,8 @@ export const initialSchemaSql = `
 create table if not exists schema_migrations (
   version integer primary key,
   name text not null,
-  applied_at text not null
+  applied_at text not null,
+  created_at text not null
 );
 
 create table if not exists runs (
@@ -25,6 +26,7 @@ create table if not exists steps (
   kind text not null,
   status text not null,
   title text not null,
+  created_at text not null,
   started_at text,
   completed_at text
 );
@@ -99,7 +101,9 @@ create table if not exists state_snapshots (
 
 create index if not exists idx_runs_status_created_at on runs(status, created_at);
 create index if not exists idx_steps_run_id on steps(run_id);
+create index if not exists idx_steps_run_id_status_created_at on steps(run_id, status, created_at);
 create index if not exists idx_messages_run_id on messages(run_id);
+create index if not exists idx_messages_run_id_created_at on messages(run_id, created_at);
 create index if not exists idx_tool_calls_run_id_status on tool_calls(run_id, status);
 create index if not exists idx_tool_calls_run_id_status_created_at on tool_calls(run_id, status, created_at);
 create index if not exists idx_approvals_status on approvals(status);
@@ -108,4 +112,5 @@ create index if not exists idx_evidence_run_id on evidence(run_id);
 create index if not exists idx_evidence_run_id_created_at on evidence(run_id, created_at);
 create index if not exists idx_events_run_id_created_at on events(run_id, created_at);
 create index if not exists idx_settings_updated_at on settings(updated_at);
+create index if not exists idx_state_snapshots_run_id_created_at on state_snapshots(run_id, created_at);
 `;

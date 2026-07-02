@@ -25,6 +25,13 @@ function openTestDatabase(path: string): CorvusDatabase {
   return db;
 }
 
+function tableColumns(db: CorvusDatabase, table: string): string[] {
+  return db
+    .prepare(`pragma table_info(${table})`)
+    .all()
+    .map((row) => (row as { name: string }).name);
+}
+
 describe("database migrations", () => {
   it("creates the durable harness schema idempotently", async () => {
     const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
@@ -75,6 +82,36 @@ describe("database migrations", () => {
         )
         .run("tool_missing_run", "missing_run", "now", "local", "pending", "{}", 1000, "2026-07-02T00:00:00.000Z"),
     ).toThrow(/FOREIGN KEY constraint failed/);
+
+    db.close();
+  });
+
+  it("adds creation timestamps to every durable schema table", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
+    roots.push(root);
+    const db = openTestDatabase(join(root, "corvus.db"));
+
+    ensureDatabase(db);
+
+    for (const table of [
+      "approvals",
+      "events",
+      "evidence",
+      "messages",
+      "runs",
+      "schema_migrations",
+      "settings",
+      "state_snapshots",
+      "steps",
+      "tool_calls",
+    ]) {
+      expect(tableColumns(db, table), `${table} should include created_at`).toContain("created_at");
+    }
+    expect(tableColumns(db, "schema_migrations")).toContain("applied_at");
+    expect(db.prepare("select created_at, applied_at from schema_migrations where version = 1").get()).toEqual({
+      created_at: expect.any(String),
+      applied_at: expect.any(String),
+    });
 
     db.close();
   });
@@ -130,8 +167,11 @@ describe("database migrations", () => {
         "idx_approvals_run_id_status_created_at",
         "idx_events_run_id_created_at",
         "idx_evidence_run_id_created_at",
+        "idx_messages_run_id_created_at",
         "idx_runs_status_created_at",
         "idx_settings_updated_at",
+        "idx_state_snapshots_run_id_created_at",
+        "idx_steps_run_id_status_created_at",
         "idx_tool_calls_run_id_status_created_at",
       ]),
     );
