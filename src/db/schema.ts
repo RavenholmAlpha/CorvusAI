@@ -75,6 +75,13 @@ create table if not exists evidence (
   created_at text not null
 );
 
+create table if not exists settings (
+  key text primary key,
+  value_json text not null,
+  created_at text not null,
+  updated_at text not null
+);
+
 create table if not exists events (
   id text primary key,
   run_id text,
@@ -90,10 +97,15 @@ create table if not exists state_snapshots (
   created_at text not null
 );
 
+create index if not exists idx_runs_status_created_at on runs(status, created_at);
 create index if not exists idx_steps_run_id on steps(run_id);
 create index if not exists idx_messages_run_id on messages(run_id);
 create index if not exists idx_tool_calls_run_id_status on tool_calls(run_id, status);
+create index if not exists idx_tool_calls_run_id_status_created_at on tool_calls(run_id, status, created_at);
 create index if not exists idx_approvals_status on approvals(status);
+create index if not exists idx_approvals_run_id_status_created_at on approvals(run_id, status, created_at);
 create index if not exists idx_evidence_run_id on evidence(run_id);
+create index if not exists idx_evidence_run_id_created_at on evidence(run_id, created_at);
 create index if not exists idx_events_run_id_created_at on events(run_id, created_at);
+create index if not exists idx_settings_updated_at on settings(updated_at);
 `;

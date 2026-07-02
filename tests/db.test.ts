@@ -2,22 +2,35 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { openCorvusDatabase } from "../src/db/connection.js";
+import { openCorvusDatabase, type CorvusDatabase } from "../src/db/connection.js";
 import { ensureDatabase } from "../src/db/migrations.js";
 
 const roots: string[] = [];
+const databases: CorvusDatabase[] = [];
 
 afterEach(async () => {
+  for (const db of databases) {
+    if (db.open) {
+      db.close();
+    }
+  }
+  databases.length = 0;
   await Promise.all(roots.map((root) => rm(root, { recursive: true, force: true })));
   roots.length = 0;
 });
+
+function openTestDatabase(path: string): CorvusDatabase {
+  const db = openCorvusDatabase(path);
+  databases.push(db);
+  return db;
+}
 
 describe("database migrations", () => {
   it("creates the durable harness schema idempotently", async () => {
     const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
     roots.push(root);
     const dbPath = join(root, "corvus.db");
-    const db = openCorvusDatabase(dbPath);
+    const db = openTestDatabase(dbPath);
 
     ensureDatabase(db);
     ensureDatabase(db);
@@ -49,7 +62,7 @@ describe("database migrations", () => {
   it("enforces foreign keys for run-owned durable records", async () => {
     const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
     roots.push(root);
-    const db = openCorvusDatabase(join(root, "corvus.db"));
+    const db = openTestDatabase(join(root, "corvus.db"));
 
     ensureDatabase(db);
 
@@ -71,7 +84,7 @@ describe("database migrations", () => {
     roots.push(root);
     const dbPath = join(root, "corvus.db");
     const createdAt = "2026-07-02T00:00:00.000Z";
-    const first = openCorvusDatabase(dbPath);
+    const first = openTestDatabase(dbPath);
 
     ensureDatabase(first);
     first
@@ -86,7 +99,7 @@ describe("database migrations", () => {
       .run("harness.mode", JSON.stringify({ durable: true }), createdAt, createdAt);
     first.close();
 
-    const reopened = openCorvusDatabase(dbPath);
+    const reopened = openTestDatabase(dbPath);
     ensureDatabase(reopened);
 
     expect(reopened.prepare("select goal from runs where id = ?").get("run_persisted")).toEqual({
@@ -103,7 +116,7 @@ describe("database migrations", () => {
   it("creates indexes for common status and creation-time queries", async () => {
     const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
     roots.push(root);
-    const db = openCorvusDatabase(join(root, "corvus.db"));
+    const db = openTestDatabase(join(root, "corvus.db"));
 
     ensureDatabase(db);
 
