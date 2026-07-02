@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { CommandDefinition } from "../src/commands.js";
 import { loadPlugins, type PluginApi } from "../src/plugins.js";
 import { createDefaultPolicy } from "../src/permissions.js";
 import { createToolManifest } from "../src/tools/protocol.js";
@@ -76,5 +77,75 @@ describe("plugin loader", () => {
     );
 
     await expect(tools.execute("manifest_plugin", { text: "hello" })).resolves.toEqual({ text: "hello" });
+  });
+
+  it("does not register plugin tools when activation fails after registration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-plugin-"));
+    roots.push(root);
+    const pluginDir = join(root, "broken-plugin");
+    await mkdir(pluginDir);
+    await writeFile(
+      join(pluginDir, "corvus.plugin.json"),
+      JSON.stringify({ name: "broken-plugin", version: "1.0.0", entry: "index.mjs" }),
+    );
+    await writeFile(
+      join(pluginDir, "index.mjs"),
+      [
+        "export default function activate(api) {",
+        "  api.registerTool({",
+        "    name: 'broken_tool',",
+        "    description: 'Should not be committed',",
+        "    capability: 'local',",
+        "    parameters: { type: 'object', properties: {}, additionalProperties: false },",
+        "    execute: () => ({ ok: true })",
+        "  });",
+        "  throw new Error('activation failed');",
+        "}",
+      ].join("\n"),
+    );
+
+    const tools = new ToolRegistry(createDefaultPolicy());
+    const loaded = await loadPlugins(root, { tools });
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({ name: "broken-plugin", status: "failed", error: "activation failed" });
+    await expect(tools.execute("broken_tool", {})).rejects.toThrow("Unknown tool: broken_tool");
+  });
+
+  it("does not register plugin commands when activation fails after registration", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-plugin-"));
+    roots.push(root);
+    const pluginDir = join(root, "broken-command-plugin");
+    await mkdir(pluginDir);
+    await writeFile(
+      join(pluginDir, "corvus.plugin.json"),
+      JSON.stringify({ name: "broken-command-plugin", version: "1.0.0", entry: "index.mjs" }),
+    );
+    await writeFile(
+      join(pluginDir, "index.mjs"),
+      [
+        "export default function activate(api) {",
+        "  api.registerCommand({",
+        "    name: 'broken_command',",
+        "    summary: 'Should not be committed',",
+        "    usage: '/broken_command',",
+        "    execute: () => ({ ok: true, message: 'unreachable' })",
+        "  });",
+        "  throw new Error('command activation failed');",
+        "}",
+      ].join("\n"),
+    );
+
+    const tools = new ToolRegistry(createDefaultPolicy());
+    const commands: CommandDefinition[] = [];
+    const loaded = await loadPlugins(root, { tools, registerCommand: (command) => commands.push(command) });
+
+    expect(loaded).toHaveLength(1);
+    expect(loaded[0]).toMatchObject({
+      name: "broken-command-plugin",
+      status: "failed",
+      error: "command activation failed",
+    });
+    expect(commands).toEqual([]);
   });
 });

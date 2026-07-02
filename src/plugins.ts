@@ -53,8 +53,9 @@ export async function loadPlugins(root: string, context: PluginLoadContext): Pro
     }
 
     const pluginDir = join(resolvedRoot, entry.name);
+    let manifest: PluginManifest | undefined;
     try {
-      const manifest = await readManifest(pluginDir);
+      manifest = await readManifest(pluginDir);
       const entryUrl = pathToFileURL(join(pluginDir, manifest.entry)).href;
       const module = (await import(`${entryUrl}?t=${Date.now()}`)) as {
         default?: (api: PluginApi) => Promise<void> | void;
@@ -64,13 +65,28 @@ export async function loadPlugins(root: string, context: PluginLoadContext): Pro
       if (!activate) {
         throw new Error("Plugin does not export a default activate function");
       }
+      const stagedTools: RegisterableTool[] = [];
+      const stagedCommands: CommandDefinition[] = [];
       await activate({
-        registerTool: (tool) => context.tools.register(tool),
-        registerCommand: context.registerCommand,
+        registerTool: (tool) => stagedTools.push(tool),
+        registerCommand: context.registerCommand ? (command) => stagedCommands.push(command) : undefined,
       });
+      for (const tool of stagedTools) {
+        context.tools.register(tool);
+      }
+      if (context.registerCommand) {
+        for (const command of stagedCommands) {
+          context.registerCommand(command);
+        }
+      }
       loaded.push({ name: manifest.name, version: manifest.version, status: "loaded" });
     } catch (error) {
-      loaded.push({ name: entry.name, version: "unknown", status: "failed", error: (error as Error).message });
+      loaded.push({
+        name: manifest?.name ?? entry.name,
+        version: manifest?.version ?? "unknown",
+        status: "failed",
+        error: (error as Error).message,
+      });
     }
   }
 

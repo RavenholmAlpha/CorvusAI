@@ -93,19 +93,19 @@ export class ToolRegistry {
       throw new Error(`Unknown tool: ${name}`);
     }
 
+    const validatedInput = validateToolInput(tool, input);
     const decision = decidePermission(this.policy, { toolName: tool.name, capability: tool.capability });
     if (decision === "deny") {
       throw new Error(`Tool ${tool.name} denied by permission policy`);
     }
 
     if (decision === "ask") {
-      const approved = await this.permissionRequester?.({ tool, input, decision });
+      const approved = await this.permissionRequester?.({ tool, input: validatedInput, decision });
       if (!approved) {
         throw new Error(`Tool ${tool.name} requires approval`);
       }
     }
 
-    const validatedInput = validateToolInput(tool, input);
     const normalized = await executeToolManifest(tool, validatedInput, context);
     if (!normalized.ok) {
       throw new Error(normalized.error);
@@ -152,27 +152,35 @@ async function executeToolManifest(
   const execution = createExecutionContext(tool, overrides);
   const timeoutMs = Math.max(0, execution.context.timeoutMs);
   const timeoutError = new Error(`Tool ${tool.name} timed out after ${timeoutMs}ms`);
-  let timedOut = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
 
-  const timeout = new Promise<ToolRunResult>((_, reject) => {
+  if (execution.context.signal.aborted) {
+    execution.cleanup();
+    throw abortError(tool, execution.context.signal.reason);
+  }
+
+  const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
-      timedOut = true;
       execution.abort(timeoutError);
       reject(timeoutError);
     }, timeoutMs);
   });
 
+  const abort = new Promise<never>((_, reject) => {
+    const onAbort = () => reject(abortError(tool, execution.context.signal.reason));
+    execution.context.signal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => execution.context.signal.removeEventListener("abort", onAbort);
+  });
+
   try {
-    const result = await Promise.race([Promise.resolve(tool.execute(input, execution.context)), timeout]);
-    if (timedOut) {
-      throw timeoutError;
-    }
+    const result = await Promise.race([Promise.resolve(tool.execute(input, execution.context)), timeout, abort]);
     return normalizeToolResult(result);
   } finally {
     if (timer) {
       clearTimeout(timer);
     }
+    removeAbortListener?.();
     execution.cleanup();
   }
 }
@@ -239,4 +247,14 @@ function createExecutionContext(
 
 function defaultNamespace(capability: string): string {
   return capability.split(".")[0] || "tool";
+}
+
+function abortError(tool: ToolManifest, reason: unknown): Error {
+  if (reason instanceof Error) {
+    return reason;
+  }
+  if (typeof reason === "string" && reason.length > 0) {
+    return new Error(reason);
+  }
+  return new Error(`Tool ${tool.name} aborted`);
 }

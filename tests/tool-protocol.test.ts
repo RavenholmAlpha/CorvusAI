@@ -81,6 +81,28 @@ describe("tool protocol", () => {
     expect(execute).not.toHaveBeenCalled();
   });
 
+  it("validates ask-permission tools before requesting permission", async () => {
+    const execute = vi.fn(async () => ({ text: "unreachable" }));
+    const requestPermission = vi.fn(async () => true);
+    const registry = new ToolRegistry(createDefaultPolicy(), { onPermissionRequest: requestPermission });
+    registry.register({
+      name: "write_required",
+      description: "Write required text",
+      capability: "filesystem.write",
+      parameters: {
+        type: "object",
+        properties: { text: { type: "string" } },
+        required: ["text"],
+        additionalProperties: false,
+      },
+      execute,
+    });
+
+    await expect(registry.execute("write_required", {})).rejects.toThrow(/Invalid arguments for write_required/);
+    expect(requestPermission).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
   it("preserves old-style tool results that look like protocol failures", async () => {
     const registry = new ToolRegistry(createDefaultPolicy());
     registry.register({
@@ -146,5 +168,64 @@ describe("tool protocol", () => {
 
     await expect(registry.execute("wait_forever", {})).rejects.toThrow(/timed out/i);
     expect(observedAbort).toBe(true);
+  });
+
+  it("rejects already-aborted caller signals before executing a manifest", async () => {
+    const execute = vi.fn(() => ({ ok: true as const, output: "unreachable" }));
+    const controller = new AbortController();
+    controller.abort(new Error("caller aborted"));
+    const registry = new ToolRegistry(createDefaultPolicy());
+    registry.register(
+      createToolManifest({
+        name: "already_aborted",
+        namespace: "test",
+        version: "1.0.0",
+        description: "Should not execute",
+        capability: "local",
+        risk: "low",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        timeoutMs: 1000,
+        outputLimitBytes: 1000,
+        concurrency: { perTool: 1, perRun: 1, global: 1 },
+        evidencePolicy: "summary",
+        resources: [],
+        execute,
+      }),
+    );
+
+    await expect(registry.execute("already_aborted", {}, { signal: controller.signal })).rejects.toThrow(
+      /caller aborted|aborted/i,
+    );
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("rejects caller aborts during manifests that ignore their signal", async () => {
+    const controller = new AbortController();
+    const registry = new ToolRegistry(createDefaultPolicy());
+    registry.register(
+      createToolManifest({
+        name: "ignores_abort",
+        namespace: "test",
+        version: "1.0.0",
+        description: "Ignores abort signal",
+        capability: "local",
+        risk: "low",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        timeoutMs: 1000,
+        outputLimitBytes: 1000,
+        concurrency: { perTool: 1, perRun: 1, global: 1 },
+        evidencePolicy: "summary",
+        resources: [],
+        execute: () =>
+          new Promise((resolve) => {
+            setTimeout(() => resolve({ ok: true, output: "late success" }), 50);
+          }),
+      }),
+    );
+
+    const execution = registry.execute("ignores_abort", {}, { signal: controller.signal });
+    setTimeout(() => controller.abort(new Error("caller canceled")), 5);
+
+    await expect(execution).rejects.toThrow(/caller canceled|aborted/i);
   });
 });
