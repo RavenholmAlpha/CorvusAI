@@ -7,3 +7,7 @@ export * from "./plugins.js";
 export * from "./runtime.js";
 export * from "./tools/index.js";
 export * from "./tui.js";
+export * from "./harness/types.js";
+export * from "./harness/event-log.js";
+export * from "./harness/run-store.js";
+export * from "./harness/evidence-store.js";
