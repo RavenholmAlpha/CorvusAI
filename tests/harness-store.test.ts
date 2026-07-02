@@ -86,6 +86,45 @@ describe("durable harness stores", () => {
     ]);
   });
 
+  it("rejects unsupported event payload values before inserting an event", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "bad event payloads", model: "test-model", endpoint: "https://example.test/v1" });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const unsupportedPayloads: Array<[string, Record<string, unknown>]> = [
+      ["undefined", { bad: undefined }],
+      ["function", { bad: () => undefined }],
+      ["NaN", { bad: Number.NaN }],
+      ["BigInt", { bad: 1n }],
+      ["circular", circular],
+    ];
+
+    for (const [name, payload] of unsupportedPayloads) {
+      const before = db.prepare("select count(*) as count from events where run_id = ?").get(run.id) as {
+        count: number;
+      };
+
+      expect(() => events.append(`bad.${name}`, payload, run.id)).toThrow(/Unsupported durable JSON value at payload/);
+
+      expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(before);
+    }
+  });
+
+  it("normalizes returned event payloads to the persisted JSON value", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "normalized event", model: "test-model", endpoint: "https://example.test/v1" });
+
+    const event = events.append("json.normalized", { zero: -0, nested: { values: [-0, 1] } }, run.id);
+    const persisted = db.prepare("select payload_json from events where id = ?").get(event.id) as {
+      payload_json: string;
+    };
+
+    expect(Object.is(event.payload.zero, 0)).toBe(true);
+    expect(Object.is((event.payload.nested as { values: number[] }).values[0], 0)).toBe(true);
+    expect(event.payload).toEqual(JSON.parse(persisted.payload_json));
+    expect(events.listEvents(run.id).find((item) => item.id === event.id)?.payload).toEqual(event.payload);
+  });
+
   it("creates, lists, and updates runs with camelCase row fields and lifecycle events", async () => {
     const { events, runs } = await createStores();
 
@@ -168,6 +207,53 @@ describe("durable harness stores", () => {
       "snapshot.created",
       "snapshot.created",
     ]);
+  });
+
+  it("rejects unsupported snapshot values before inserting a snapshot or event", async () => {
+    const { db, runs } = await createStores();
+    const run = runs.createRun({ goal: "bad snapshots", model: "test-model", endpoint: "https://example.test/v1" });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    const unsupportedSnapshots: Array<[string, unknown]> = [
+      ["undefined", { bad: undefined }],
+      ["function", { bad: () => undefined }],
+      ["NaN", { bad: Number.NaN }],
+      ["BigInt", { bad: 1n }],
+      ["circular", circular],
+    ];
+
+    for (const [, snapshot] of unsupportedSnapshots) {
+      const snapshotsBefore = db
+        .prepare("select count(*) as count from state_snapshots where run_id = ?")
+        .get(run.id) as { count: number };
+      const eventsBefore = db.prepare("select count(*) as count from events where run_id = ?").get(run.id) as {
+        count: number;
+      };
+
+      expect(() => runs.writeSnapshot(run.id, snapshot)).toThrow(/Unsupported durable JSON value at snapshot/);
+
+      expect(db.prepare("select count(*) as count from state_snapshots where run_id = ?").get(run.id)).toEqual(
+        snapshotsBefore,
+      );
+      expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+    }
+  });
+
+  it("normalizes returned snapshots to the persisted JSON value", async () => {
+    const { db, runs } = await createStores();
+    const run = runs.createRun({ goal: "normalized snapshot", model: "test-model", endpoint: "https://example.test/v1" });
+
+    const snapshot = runs.writeSnapshot(run.id, { zero: -0, nested: { values: [-0, 1] } });
+    const persisted = db.prepare("select snapshot_json from state_snapshots where id = ?").get(snapshot.id) as {
+      snapshot_json: string;
+    };
+    const persistedSnapshot = JSON.parse(persisted.snapshot_json);
+    const value = snapshot.snapshot as { zero: number; nested: { values: number[] } };
+
+    expect(Object.is(value.zero, 0)).toBe(true);
+    expect(Object.is(value.nested.values[0], 0)).toBe(true);
+    expect(snapshot.snapshot).toEqual(persistedSnapshot);
+    expect(runs.latestSnapshot(run.id)?.snapshot).toEqual(snapshot.snapshot);
   });
 
   it("creates, gets, and lists evidence with creation events", async () => {

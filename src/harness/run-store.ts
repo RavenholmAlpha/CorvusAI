@@ -4,6 +4,8 @@ import type { EventLog } from "./event-log.js";
 import {
   newId,
   nowIso,
+  serializeDurableJson,
+  type JsonValue,
   type MessageRow,
   type RunRow,
   type RunStatus,
@@ -235,16 +237,17 @@ export class RunStore {
 
   writeSnapshot(runId: string, snapshot: unknown): SnapshotRow {
     return this.db.transaction(() => {
+      const serializedSnapshot = serializeDurableJson(snapshot, "snapshot");
       const row: SnapshotRow = {
         id: newId("snap"),
         runId,
-        snapshot,
+        snapshot: serializedSnapshot.value,
         createdAt: nowIso(),
       };
 
       this.db
         .prepare("insert into state_snapshots (id, run_id, snapshot_json, created_at) values (?, ?, ?, ?)")
-        .run(row.id, row.runId, JSON.stringify(row.snapshot), row.createdAt);
+        .run(row.id, row.runId, serializedSnapshot.json, row.createdAt);
       this.events.append("snapshot.created", { runId: row.runId, snapshotId: row.id }, row.runId);
       return row;
     })();
@@ -299,7 +302,7 @@ function mapSnapshotRow(row: SnapshotDbRow): SnapshotRow {
   return {
     id: row.id,
     runId: row.run_id,
-    snapshot: JSON.parse(row.snapshot_json) as unknown,
+    snapshot: JSON.parse(row.snapshot_json) as JsonValue,
     createdAt: row.created_at,
   };
 }

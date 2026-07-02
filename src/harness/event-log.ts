@@ -1,5 +1,5 @@
 import type { CorvusDatabase } from "../db/connection.js";
-import { newId, nowIso, type EventRow } from "./types.js";
+import { newId, nowIso, serializeDurableJsonObject, type EventRow, type JsonObject } from "./types.js";
 
 interface EventDbRow {
   id: string;
@@ -13,17 +13,18 @@ export class EventLog {
   constructor(private readonly db: CorvusDatabase) {}
 
   append(type: string, payload: Record<string, unknown>, runId?: string | null): EventRow {
+    const serializedPayload = serializeDurableJsonObject(payload, "payload");
     const row: EventRow = {
       id: newId("evt"),
       runId: runId ?? null,
       type,
-      payload,
+      payload: serializedPayload.value,
       createdAt: nowIso(),
     };
 
     this.db
       .prepare("insert into events (id, run_id, type, payload_json, created_at) values (?, ?, ?, ?, ?)")
-      .run(row.id, row.runId, row.type, JSON.stringify(row.payload), row.createdAt);
+      .run(row.id, row.runId, row.type, serializedPayload.json, row.createdAt);
 
     return row;
   }
@@ -46,7 +47,7 @@ function mapEventRow(row: EventDbRow): EventRow {
     id: row.id,
     runId: row.run_id,
     type: row.type,
-    payload: JSON.parse(row.payload_json) as Record<string, unknown>,
+    payload: JSON.parse(row.payload_json) as JsonObject,
     createdAt: row.created_at,
   };
 }
