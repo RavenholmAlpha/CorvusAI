@@ -45,6 +45,36 @@ async function createStores(): Promise<{
   return { db, events, runs, evidence };
 }
 
+function withHiddenToJson(returnValue: unknown): Record<string, unknown> {
+  const value: Record<string, unknown> = { stable: "original" };
+  Object.defineProperty(value, "toJSON", {
+    value: () => returnValue,
+    enumerable: false,
+  });
+  return value;
+}
+
+function withAccessor(counter: { count: number }): Record<string, unknown> {
+  const value: Record<string, unknown> = { stable: "original" };
+  Object.defineProperty(value, "computed", {
+    enumerable: true,
+    get() {
+      counter.count += 1;
+      return "side effect";
+    },
+  });
+  return value;
+}
+
+function captureError(action: () => unknown): Error | undefined {
+  try {
+    action();
+    return undefined;
+  } catch (error) {
+    return error as Error;
+  }
+}
+
 describe("durable harness stores", () => {
   it("exports store classes from the package entry point", () => {
     expect(ExportedEventLog).toBe(EventLog);
@@ -123,6 +153,84 @@ describe("durable harness stores", () => {
     expect(Object.is((event.payload.nested as { values: number[] }).values[0], 0)).toBe(true);
     expect(event.payload).toEqual(JSON.parse(persisted.payload_json));
     expect(events.listEvents(run.id).find((item) => item.id === event.id)?.payload).toEqual(event.payload);
+  });
+
+  it("rejects hidden own toJSON before it can rewrite event payloads or snapshots", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "hidden toJSON", model: "test-model", endpoint: "https://example.test/v1" });
+    const eventsBefore = db.prepare("select count(*) as count from events where run_id = ?").get(run.id) as {
+      count: number;
+    };
+
+    expect(() => events.append("bad.to_json", withHiddenToJson({ stable: "rewritten" }), run.id)).toThrow(
+      /Unsupported durable JSON value at payload\.toJSON/,
+    );
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+
+    const snapshotsBefore = db
+      .prepare("select count(*) as count from state_snapshots where run_id = ?")
+      .get(run.id) as { count: number };
+    expect(() => runs.writeSnapshot(run.id, withHiddenToJson({ stable: "rewritten" }))).toThrow(
+      /Unsupported durable JSON value at snapshot\.toJSON/,
+    );
+    expect(db.prepare("select count(*) as count from state_snapshots where run_id = ?").get(run.id)).toEqual(
+      snapshotsBefore,
+    );
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+  });
+
+  it("rejects accessors without invoking event payload or snapshot getters", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "accessors", model: "test-model", endpoint: "https://example.test/v1" });
+    const eventCounter = { count: 0 };
+    const eventsBefore = db.prepare("select count(*) as count from events where run_id = ?").get(run.id) as {
+      count: number;
+    };
+
+    const eventError = captureError(() => events.append("bad.accessor", withAccessor(eventCounter), run.id));
+
+    expect(eventCounter.count).toBe(0);
+    expect(eventError?.message).toMatch(/Unsupported durable JSON value at payload\.computed/);
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+
+    const snapshotCounter = { count: 0 };
+    const snapshotsBefore = db
+      .prepare("select count(*) as count from state_snapshots where run_id = ?")
+      .get(run.id) as { count: number };
+    const snapshotError = captureError(() => runs.writeSnapshot(run.id, withAccessor(snapshotCounter)));
+
+    expect(snapshotCounter.count).toBe(0);
+    expect(snapshotError?.message).toMatch(/Unsupported durable JSON value at snapshot\.computed/);
+    expect(db.prepare("select count(*) as count from state_snapshots where run_id = ?").get(run.id)).toEqual(
+      snapshotsBefore,
+    );
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+  });
+
+  it("reports unsupported durable JSON errors when toJSON would return BigInt", async () => {
+    const { db, events, runs } = await createStores();
+    const run = runs.createRun({ goal: "toJSON bigint", model: "test-model", endpoint: "https://example.test/v1" });
+    const eventsBefore = db.prepare("select count(*) as count from events where run_id = ?").get(run.id) as {
+      count: number;
+    };
+
+    const eventError = captureError(() => events.append("bad.bigint_to_json", withHiddenToJson(1n), run.id));
+
+    expect(eventError?.message).toMatch(/Unsupported durable JSON value at payload\.toJSON/);
+    expect(eventError?.message).not.toMatch(/serialize a BigInt/);
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
+
+    const snapshotsBefore = db
+      .prepare("select count(*) as count from state_snapshots where run_id = ?")
+      .get(run.id) as { count: number };
+    const snapshotError = captureError(() => runs.writeSnapshot(run.id, withHiddenToJson(1n)));
+
+    expect(snapshotError?.message).toMatch(/Unsupported durable JSON value at snapshot\.toJSON/);
+    expect(snapshotError?.message).not.toMatch(/serialize a BigInt/);
+    expect(db.prepare("select count(*) as count from state_snapshots where run_id = ?").get(run.id)).toEqual(
+      snapshotsBefore,
+    );
+    expect(db.prepare("select count(*) as count from events where run_id = ?").get(run.id)).toEqual(eventsBefore);
   });
 
   it("creates, lists, and updates runs with camelCase row fields and lifecycle events", async () => {

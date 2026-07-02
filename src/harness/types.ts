@@ -99,8 +99,8 @@ export function nowIso(): string {
 }
 
 export function serializeDurableJson(value: unknown, label: string): SerializedDurableJson {
-  validateDurableJsonValue(value, label, new WeakSet<object>());
-  const json = JSON.stringify(value);
+  const normalized = normalizeDurableJsonValue(value, label, new WeakSet<object>());
+  const json = JSON.stringify(normalized);
   if (json === undefined) {
     throw unsupportedDurableJsonValue(label, "root value is not JSON serializable");
   }
@@ -118,20 +118,20 @@ export function serializeDurableJsonObject(value: Record<string, unknown>, label
   return serialized as SerializedDurableJson<JsonObject>;
 }
 
-function validateDurableJsonValue(value: unknown, path: string, seen: WeakSet<object>): void {
+function normalizeDurableJsonValue(value: unknown, path: string, seen: WeakSet<object>): JsonValue {
   if (value === null) {
-    return;
+    return null;
   }
 
   switch (typeof value) {
     case "string":
     case "boolean":
-      return;
+      return value;
     case "number":
       if (!Number.isFinite(value)) {
         throw unsupportedDurableJsonValue(path, `${String(value)} is not a finite JSON number`);
       }
-      return;
+      return value;
     case "undefined":
       throw unsupportedDurableJsonValue(path, "undefined is not valid JSON");
     case "function":
@@ -141,12 +141,13 @@ function validateDurableJsonValue(value: unknown, path: string, seen: WeakSet<ob
     case "symbol":
       throw unsupportedDurableJsonValue(path, "symbols are not valid JSON");
     case "object":
-      validateDurableJsonObjectLike(value, path, seen);
-      return;
+      return normalizeDurableJsonObjectLike(value, path, seen);
   }
+
+  throw unsupportedDurableJsonValue(path, `unsupported type ${typeof value}`);
 }
 
-function validateDurableJsonObjectLike(value: object, path: string, seen: WeakSet<object>): void {
+function normalizeDurableJsonObjectLike(value: object, path: string, seen: WeakSet<object>): JsonArray | JsonObject {
   if (seen.has(value)) {
     throw unsupportedDurableJsonValue(path, "circular references are not valid JSON");
   }
@@ -154,8 +155,7 @@ function validateDurableJsonObjectLike(value: object, path: string, seen: WeakSe
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      validateDurableJsonArray(value, path, seen);
-      return;
+      return normalizeDurableJsonArray(value, path, seen);
     }
 
     const prototype = Object.getPrototypeOf(value);
@@ -163,28 +163,62 @@ function validateDurableJsonObjectLike(value: object, path: string, seen: WeakSe
       throw unsupportedDurableJsonValue(path, "non-plain objects are not valid JSON");
     }
 
-    rejectSymbolKeys(value, path);
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-      validateDurableJsonValue(item, childPath(path, key), seen);
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    rejectUnsafeOwnProperties(value, descriptors, path);
+
+    const normalized: JsonObject = {};
+    for (const key of Object.keys(descriptors)) {
+      const descriptor = descriptors[key];
+      if (!descriptor?.enumerable) {
+        continue;
+      }
+      normalized[key] = normalizeDurableJsonValue(descriptor.value, childPath(path, key), seen);
     }
+    return normalized;
   } finally {
     seen.delete(value);
   }
 }
 
-function validateDurableJsonArray(value: unknown[], path: string, seen: WeakSet<object>): void {
-  rejectSymbolKeys(value, path);
-  for (const key of Object.keys(value)) {
-    if (!/^(0|[1-9]\d*)$/.test(key) || Number(key) >= value.length) {
+function normalizeDurableJsonArray(value: unknown[], path: string, seen: WeakSet<object>): JsonArray {
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  rejectUnsafeOwnProperties(value, descriptors, path);
+
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if (key === "length" || isArrayIndex(key, value.length)) {
+      continue;
+    }
+    if ("get" in descriptor || "set" in descriptor) {
+      throw unsupportedDurableJsonValue(childPath(path, key), "accessor properties are not valid JSON");
+    }
+    if (descriptor.enumerable) {
       throw unsupportedDurableJsonValue(childPath(path, key), "array object properties are not valid JSON");
     }
   }
 
+  const normalized: JsonArray = [];
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.prototype.hasOwnProperty.call(value, index)) {
+    const descriptor = descriptors[String(index)];
+    if (!descriptor) {
       throw unsupportedDurableJsonValue(`${path}[${index}]`, "array holes are not valid JSON");
     }
-    validateDurableJsonValue(value[index], `${path}[${index}]`, seen);
+    if ("get" in descriptor || "set" in descriptor) {
+      throw unsupportedDurableJsonValue(`${path}[${index}]`, "accessor properties are not valid JSON");
+    }
+    normalized[index] = normalizeDurableJsonValue(descriptor.value, `${path}[${index}]`, seen);
+  }
+  return normalized;
+}
+
+function rejectUnsafeOwnProperties(value: object, descriptors: Record<string, PropertyDescriptor>, path: string): void {
+  rejectSymbolKeys(value, path);
+  if (Object.prototype.hasOwnProperty.call(descriptors, "toJSON")) {
+    throw unsupportedDurableJsonValue(childPath(path, "toJSON"), "own toJSON is not supported");
+  }
+  for (const [key, descriptor] of Object.entries(descriptors)) {
+    if ("get" in descriptor || "set" in descriptor) {
+      throw unsupportedDurableJsonValue(childPath(path, key), "accessor properties are not valid JSON");
+    }
   }
 }
 
@@ -201,6 +235,14 @@ function isJsonObject(value: JsonValue): value is JsonObject {
 
 function childPath(path: string, key: string): string {
   return /^[A-Za-z_$][\w$]*$/.test(key) ? `${path}.${key}` : `${path}[${JSON.stringify(key)}]`;
+}
+
+function isArrayIndex(key: string, length: number): boolean {
+  if (!/^(0|[1-9]\d*)$/.test(key)) {
+    return false;
+  }
+  const index = Number(key);
+  return Number.isSafeInteger(index) && index >= 0 && index < length;
 }
 
 function unsupportedDurableJsonValue(path: string, reason: string): Error {
