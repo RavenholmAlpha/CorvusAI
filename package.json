@@ -22,8 +22,12 @@
     "plugins"
   ],
   "license": "MIT",
-  "dependencies": {},
+  "dependencies": {
+    "ajv": "^8.20.0",
+    "better-sqlite3": "^12.11.1"
+  },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.10",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
