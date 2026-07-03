@@ -344,6 +344,98 @@ describe("HarnessRunner", () => {
       toolCallId: "call_needs_approval",
       content: expect.stringContaining("succeeded"),
     });
+    expect(runs.listMessages(paused.runId)[3]?.content).toContain("evidenceId");
+    expect(
+      runs
+        .listMessages(paused.runId)
+        .filter((message) => message.toolCallId === "call_needs_approval" && message.content?.includes("succeeded")),
+    ).toHaveLength(1);
+    expect(
+      events
+        .listEvents(paused.runId)
+        .filter((event) => event.type === "step.status_changed" && event.payload.status === "succeeded"),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          payload: expect.objectContaining({ previousStatus: "interrupted", status: "succeeded" }),
+        }),
+      ]),
+    );
+  });
+
+  it("keeps maxToolRounds accounting across resume", async () => {
+    const { config, events, runs, evidence, approvals, queue, tools } = await createHarness((current) => {
+      current.maxToolRounds = 1;
+    });
+    let extraToolExecutions = 0;
+    tools.register(echoTool("process"));
+    tools.register(
+      createToolManifest({
+        name: "extra",
+        namespace: "test",
+        version: "1.0.0",
+        description: "Extra tool",
+        capability: "local",
+        risk: "low",
+        parameters: { type: "object", properties: {}, additionalProperties: false },
+        timeoutMs: 1000,
+        outputLimitBytes: 1000,
+        concurrency: { perTool: 1, perRun: 1, global: 1 },
+        evidencePolicy: "summary",
+        resources: [],
+        execute: () => {
+          extraToolExecutions += 1;
+          return { ok: true, output: "should not execute" };
+        },
+      }),
+    );
+    let calls = 0;
+    const model = {
+      createChatCompletion: async (): Promise<ChatCompletionResponse> => {
+        calls += 1;
+        return {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls:
+                  calls === 1
+                    ? [
+                        {
+                          id: "call_needs_approval",
+                          type: "function",
+                          function: { name: "echo", arguments: JSON.stringify({ text: "approved" }) },
+                        },
+                      ]
+                    : [
+                        {
+                          id: "call_extra",
+                          type: "function",
+                          function: { name: "extra", arguments: "{}" },
+                        },
+                      ],
+              },
+            },
+          ],
+        };
+      },
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    const paused = await runner.runTurn("needs approval");
+    const [approval] = approvals.listPending(paused.runId);
+    approvals.resolveApproval(approval.id, "approved", "once");
+    const tool = tools.list().find((candidate) => candidate.name === "echo");
+    if (!tool) {
+      throw new Error("echo tool missing");
+    }
+    await queue.runApproved(approval.toolCallId, tool);
+
+    await expect(runner.resumeRun(paused.runId)).rejects.toThrow("Tool loop exceeded maxToolRounds=1");
+
+    expect(extraToolExecutions).toBe(0);
+    expect(runs.getRun(paused.runId)?.status).toBe("failed");
   });
 
   it("fails before executing tool calls when the next tool round would exceed maxToolRounds", async () => {

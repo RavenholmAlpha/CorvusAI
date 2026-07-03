@@ -6,7 +6,13 @@ import type { EventLog } from "./event-log.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type { RunStore } from "./run-store.js";
 import type { ToolQueue, ToolQueueResult } from "./tool-queue.js";
-import type { JsonObject as DurableJsonObject, MessageRow, StepStatus, ToolCallRow } from "./types.js";
+import type {
+  EvidenceSourceType,
+  JsonObject as DurableJsonObject,
+  MessageRow,
+  StepStatus,
+  ToolCallRow,
+} from "./types.js";
 import type { ToolManifest } from "../tools/protocol.js";
 import type { ToolRegistry } from "../tools/index.js";
 
@@ -78,7 +84,18 @@ export class HarnessRunner {
 
     this.options.runs.updateRunStatus(runId, "running");
     this.writeSnapshot(runId, "resumed", 0, resumed.messages);
-    return this.continueRun(runId, resumed.messages);
+    return this.continueRun(runId, resumed.messages, countToolRounds(resumed.messages));
+  }
+
+  private latestToolEvidenceId(toolCall: ToolCallRow): string | undefined {
+    const sourceTypes = evidenceSourceTypesForToolCall(toolCall);
+    if (sourceTypes.length === 0) {
+      return undefined;
+    }
+    return this.options.evidence
+      .listEvidence(toolCall.runId)
+      .filter((evidence) => evidence.sourceId === toolCall.id && sourceTypes.includes(evidence.sourceType))
+      .at(-1)?.id;
   }
 
   private resumeMessages(runId: string): {
@@ -114,11 +131,14 @@ export class HarnessRunner {
         continue;
       }
 
+      if (toolCall.stepId) {
+        this.options.runs.updateStepStatus(toolCall.stepId, stepStatusForTerminalToolCall(toolCall.status));
+      }
       const resultMessage: ChatMessage = {
         role: "tool",
         tool_call_id: message.tool_call_id,
         name: message.name,
-        content: JSON.stringify(toolCallRowResultContent(toolCall)),
+        content: JSON.stringify(toolCallRowResultContent(toolCall, this.latestToolEvidenceId(toolCall))),
       };
       messages.push(resultMessage);
       messagesToPersist.push(resultMessage);
@@ -127,12 +147,16 @@ export class HarnessRunner {
     return { messages, messagesToPersist, pendingApprovals };
   }
 
-  private async continueRun(runId: string, messages: ChatMessage[]): Promise<{ runId: string; message: ChatMessage }> {
+  private async continueRun(
+    runId: string,
+    messages: ChatMessage[],
+    startRound = 0,
+  ): Promise<{ runId: string; message: ChatMessage }> {
     let lastModelStepId = "model";
     let runningModelStepId: string | null = null;
 
     try {
-      for (let round = 0; round <= this.options.config.maxToolRounds; round += 1) {
+      for (let round = startRound; round <= this.options.config.maxToolRounds; round += 1) {
         messages[0] = this.systemMessage();
         const modelStep = this.options.runs.createStep({
           runId,
@@ -356,6 +380,36 @@ function stepStatusForToolResult(status: ToolQueueResult["status"]): StepStatus 
   return "failed";
 }
 
+function stepStatusForTerminalToolCall(status: ToolCallRow["status"]): StepStatus {
+  if (status === "succeeded") {
+    return "succeeded";
+  }
+  if (status === "canceled") {
+    return "canceled";
+  }
+  if (status === "interrupted") {
+    return "interrupted";
+  }
+  return "failed";
+}
+
+function evidenceSourceTypesForToolCall(toolCall: ToolCallRow): EvidenceSourceType[] {
+  if (toolCall.status === "succeeded") {
+    return ["tool_result"];
+  }
+  if (toolCall.status === "failed") {
+    return ["tool_error"];
+  }
+  if (toolCall.status === "denied") {
+    return ["permission_denial"];
+  }
+  return [];
+}
+
+function countToolRounds(messages: ChatMessage[]): number {
+  return messages.filter((message) => (message.tool_calls?.length ?? 0) > 0).length;
+}
+
 function messageRowToChatMessage(row: MessageRow): ChatMessage {
   const metadata = row.metadata ?? {};
   const message: ChatMessage = {
@@ -407,7 +461,7 @@ function isTerminalToolCallStatus(status: ToolCallRow["status"]): boolean {
   return status === "succeeded" || status === "failed" || status === "denied" || status === "canceled" || status === "interrupted";
 }
 
-function toolCallRowResultContent(toolCall: ToolCallRow): Record<string, unknown> {
+function toolCallRowResultContent(toolCall: ToolCallRow, evidenceId?: string): Record<string, unknown> {
   if (toolCall.status === "succeeded") {
     const result = isRecord(toolCall.result) ? toolCall.result : undefined;
     return {
@@ -415,6 +469,7 @@ function toolCallRowResultContent(toolCall: ToolCallRow): Record<string, unknown
       toolCallId: toolCall.id,
       ...(result && "output" in result ? { output: result.output } : {}),
       ...(toolCall.result !== null ? { result: toolCall.result } : {}),
+      ...(evidenceId ? { evidenceId } : {}),
     };
   }
   return {
@@ -422,6 +477,7 @@ function toolCallRowResultContent(toolCall: ToolCallRow): Record<string, unknown
     toolCallId: toolCall.id,
     error: toolCall.error ?? `Tool ${toolCall.toolName} ${toolCall.status}`,
     ...(toolCall.result !== null ? { result: toolCall.result } : {}),
+    ...(evidenceId ? { evidenceId } : {}),
   };
 }
 
