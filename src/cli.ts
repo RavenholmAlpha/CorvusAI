@@ -71,8 +71,12 @@ function createCliHarnessAdapter(
     listMessages: (runId) => runs.listMessages(runId),
     latestSnapshot: (runId) => runs.latestSnapshot(runId),
     cancelRun: (id) => {
-      if (!runs.getRun(id)) {
+      const run = runs.getRun(id);
+      if (!run) {
         return undefined;
+      }
+      if (isTerminalRunStatus(run.status)) {
+        return run;
       }
       return runs.updateRunStatus(id, "canceled");
     },
@@ -82,6 +86,10 @@ function createCliHarnessAdapter(
     getEvidence: (id) => evidence.getEvidence(id),
     listEvidence: (runId) => evidence.listEvidence(runId),
   };
+}
+
+function isTerminalRunStatus(status: string): boolean {
+  return status === "succeeded" || status === "failed" || status === "canceled" || status === "interrupted";
 }
 
 export function isCliEntryPoint(moduleUrl: string, argvPath = process.argv[1]): boolean {

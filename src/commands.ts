@@ -278,6 +278,13 @@ export function createCoreCommands(): CommandDefinition[] {
         if (!context.harness) {
           return { ok: false, message: "Durable harness unavailable." };
         }
+        const run = context.harness.getRun(id);
+        if (!run) {
+          return { ok: false, message: `Run not found: ${id}` };
+        }
+        if (isTerminalRunStatus(run.status)) {
+          return { ok: false, message: `Run ${run.id} is already terminal with status ${run.status}.` };
+        }
         const canceled = context.harness.cancelRun(id);
         if (!canceled) {
           return { ok: false, message: `Run not found: ${id}` };
@@ -645,31 +652,39 @@ async function resolveApprovals(
   }
 
   const pending = harness.listPendingApprovals();
-  const approvals = target.toLowerCase() === "all" ? pending : pending.filter((approval) => approval.id === target);
+  const isAll = target.toLowerCase() === "all";
+  const approvals = isAll ? pending : pending.filter((approval) => approval.id === target);
   if (approvals.length === 0) {
-    return {
-      ok: false,
-      message: target.toLowerCase() === "all" ? "No pending approvals." : `Approval not found: ${target}`,
-    };
+    if (isAll) {
+      return { ok: false, message: "No pending approvals." };
+    }
+    try {
+      const resolved = harness.resolveApproval(target, status, "once");
+      return status === "approved"
+        ? executeApprovedToolCall(resolved, context)
+        : { ok: true, message: `Approval ${resolved.id} denied.` };
+    } catch (error) {
+      return { ok: false, message: `Approval not found: ${target}. ${(error as Error).message}` };
+    }
   }
 
   const lines: string[] = [];
   let ok = true;
   for (const approval of approvals) {
     try {
-      const resolved = harness.resolveApproval(approval.id, status, "once");
       if (status === "approved") {
-        lines.push(`Approval ${resolved.id} approved.`);
-        const tool = findTool(context.tools, resolved.toolName);
+        const tool = findTool(context.tools, approval.toolName);
         if (!tool) {
-          lines.push(
-            `Tool call ${resolved.toolCallId} approved; tool manifest ${resolved.toolName ?? "unknown"} unavailable.`,
-          );
+          ok = false;
+          lines.push(`Approval ${approval.id} remains pending; tool manifest ${approval.toolName ?? "unknown"} unavailable.`);
           continue;
         }
-        const executed = await harness.runApproved(resolved.toolCallId, tool);
-        lines.push(`Tool call ${executed.toolCallId} executed: ${executed.status}${formatEvidenceSuffix(executed)}.`);
+        const resolved = harness.resolveApproval(approval.id, status, "once");
+        const execution = await executeApprovedToolCall(resolved, context);
+        ok = ok && execution.ok;
+        lines.push(execution.message);
       } else {
+        const resolved = harness.resolveApproval(approval.id, status, "once");
         lines.push(`Approval ${resolved.id} denied.`);
       }
     } catch (error) {
@@ -679,6 +694,36 @@ async function resolveApprovals(
   }
 
   return { ok, message: lines.join("\n") };
+}
+
+async function executeApprovedToolCall(approval: ApprovalRow, context: CommandContext): Promise<CommandResult> {
+  const harness = context.harness;
+  if (!harness) {
+    return { ok: false, message: "Durable harness unavailable." };
+  }
+  const tool = findTool(context.tools, approval.toolName);
+  if (!tool) {
+    return {
+      ok: false,
+      message: `Approval ${approval.id} is approved, but tool manifest ${approval.toolName ?? "unknown"} is unavailable.`,
+    };
+  }
+
+  try {
+    const executed = await harness.runApproved(approval.toolCallId, tool);
+    return {
+      ok: true,
+      message: [
+        `Approval ${approval.id} approved.`,
+        `Tool call ${executed.toolCallId} executed: ${executed.status}${formatEvidenceSuffix(executed)}.`,
+      ].join("\n"),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: `Approval ${approval.id} approved, but tool call ${approval.toolCallId} execution failed: ${(error as Error).message}. Retry with /approve ${approval.id}.`,
+    };
+  }
 }
 
 function findTool(tools: ToolRegistry | undefined, name: string | null): ToolManifest | undefined {
@@ -721,6 +766,10 @@ function preview(value: string, maxLength = 500): string {
     return normalized;
   }
   return `${normalized.slice(0, maxLength - 3)}...`;
+}
+
+function isTerminalRunStatus(status: RunRow["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "canceled" || status === "interrupted";
 }
 
 function formatSettingsPanel(config: CorvusConfig): string {

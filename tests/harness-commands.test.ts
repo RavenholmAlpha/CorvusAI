@@ -201,6 +201,7 @@ describe("durable harness slash commands", () => {
   it("cancels runs through the harness adapter and reports resume as unavailable when not implemented", async () => {
     const canceled: Array<{ id: string; status: RunStatus }> = [];
     const harness = createHarness({
+      getRun: (id) => (id === run.id ? run : undefined),
       cancelRun: (id) => {
         if (id !== run.id) {
           return undefined;
@@ -217,6 +218,24 @@ describe("durable harness slash commands", () => {
     expect((await execute("/cancel run_1", { harness })).output).toContain("Run run_1 canceled.");
     expect(canceled).toEqual([{ id: "run_1", status: "canceled" }]);
     expect((await execute("/resume run_1", { harness })).output).toMatch(/resume .*not implemented/i);
+  });
+
+  it("does not cancel terminal durable runs", async () => {
+    const canceled: string[] = [];
+    const succeeded = { ...run, status: "succeeded" as const, completedAt: "2026-07-03T00:02:00.000Z" };
+    const harness = createHarness({
+      getRun: (id) => (id === succeeded.id ? succeeded : undefined),
+      cancelRun: (id) => {
+        canceled.push(id);
+        return { ...succeeded, status: "canceled" as const };
+      },
+    });
+
+    const result = await execute("/cancel run_1", { harness });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("already terminal with status succeeded");
+    expect(canceled).toEqual([]);
   });
 
   it("lists, approves, executes, and denies pending approvals", async () => {
@@ -266,6 +285,66 @@ describe("durable harness slash commands", () => {
       { id: "appr_1", status: "denied", scope: "once" },
       { id: "appr_2", status: "denied", scope: "once" },
     ]);
+  });
+
+  it("keeps an approval pending when approving requires a missing tool manifest", async () => {
+    const resolved: string[] = [];
+    const harness = createHarness({
+      listPendingApprovals: () => [{ ...approval, toolName: "missing_tool" }],
+      resolveApproval: (id, status, scope) => {
+        resolved.push(id);
+        return { ...approval, id, toolName: "missing_tool", status, decisionScope: scope };
+      },
+    });
+
+    const result = await execute("/approve appr_1", { harness, tools: [echoTool()] });
+
+    expect(result.ok).toBe(false);
+    expect(result.output).toContain("Approval appr_1 remains pending");
+    expect(result.output).toContain("missing_tool");
+    expect(resolved).toEqual([]);
+  });
+
+  it("can retry approved tool execution by approval id after runApproved throws", async () => {
+    const approved: Array<{ id: string; status: ApprovalStatus; scope: DecisionScope }> = [];
+    const executed: string[] = [];
+    let attempts = 0;
+    let alreadyApproved = false;
+    const harness = createHarness({
+      listPendingApprovals: () => (alreadyApproved ? [] : [approval]),
+      resolveApproval: (id, status, scope) => {
+        approved.push({ id, status, scope });
+        alreadyApproved = status === "approved";
+        return {
+          ...approval,
+          id,
+          status,
+          decisionScope: scope,
+          decidedAt: "2026-07-03T00:05:00.000Z",
+        };
+      },
+      runApproved: async (toolCallId) => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new Error("temporary execution failure");
+        }
+        executed.push(toolCallId);
+        return { toolCallId, status: "succeeded", evidenceId: "ev_executed" };
+      },
+    });
+
+    const first = await execute("/approve appr_1", { harness, tools: [echoTool()] });
+    const second = await execute("/approve appr_1", { harness, tools: [echoTool()] });
+
+    expect(first.ok).toBe(false);
+    expect(first.output).toContain("Approval appr_1 approved, but tool call tool_1 execution failed");
+    expect(second.ok).toBe(true);
+    expect(second.output).toContain("Tool call tool_1 executed: succeeded");
+    expect(approved).toEqual([
+      { id: "appr_1", status: "approved", scope: "once" },
+      { id: "appr_1", status: "approved", scope: "once" },
+    ]);
+    expect(executed).toEqual(["tool_1"]);
   });
 
   it("shows evidence by id or the latest evidence from the most recent run", async () => {
