@@ -29,8 +29,9 @@ export class CorvusAgent {
   async send(content: string): Promise<ChatMessage> {
     if (this.options.runner) {
       this.refreshSystemPrompt();
+      const history = this.messages.slice(1);
+      const result = await this.options.runner.runTurn(content, { history });
       this.messages.push({ role: "user", content });
-      const result = await this.options.runner.runTurn(content);
       this.messages.push(result.message);
       return result.message;
     }

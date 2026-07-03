@@ -5,6 +5,8 @@ import {
   newId,
   nowIso,
   serializeDurableJson,
+  serializeDurableJsonObject,
+  type JsonObject,
   type JsonValue,
   type MessageRow,
   type RunRow,
@@ -33,6 +35,7 @@ export interface AppendMessageInput {
   role: ChatRole;
   content: string | null;
   toolCallId?: string | null;
+  metadata?: Record<string, unknown> | null;
 }
 
 interface RunDbRow {
@@ -64,6 +67,7 @@ interface MessageDbRow {
   role: ChatRole;
   content: string | null;
   tool_call_id: string | null;
+  metadata_json: string | null;
   created_at: string;
 }
 
@@ -152,6 +156,39 @@ export class RunStore {
     })();
   }
 
+  updateStepStatus(id: string, status: StepStatus): StepRow {
+    return this.db.transaction(() => {
+      const previous = this.getStep(id);
+      if (!previous) {
+        throw new Error(`Step not found: ${id}`);
+      }
+
+      const timestamp = nowIso();
+      const shouldStart = status === "running" || terminalStepStatuses.has(status);
+      const startedAt = shouldStart ? previous.startedAt ?? timestamp : previous.startedAt;
+      const completedAt = terminalStepStatuses.has(status) ? timestamp : null;
+      this.db
+        .prepare("update steps set status = ?, started_at = ?, completed_at = ? where id = ?")
+        .run(status, startedAt, completedAt, id);
+      const updated = this.getStep(id);
+      if (!updated) {
+        throw new Error(`Step not found after update: ${id}`);
+      }
+
+      this.events.append(
+        "step.status_changed",
+        {
+          runId: updated.runId,
+          stepId: updated.id,
+          previousStatus: previous.status,
+          status,
+        },
+        updated.runId,
+      );
+      return updated;
+    })();
+  }
+
   createStep(input: CreateStepInput): StepRow {
     return this.db.transaction(() => {
       const createdAt = nowIso();
@@ -202,18 +239,30 @@ export class RunStore {
 
   appendMessage(input: AppendMessageInput): MessageRow {
     return this.db.transaction(() => {
+      const metadata = input.metadata ? serializeDurableJsonObject(input.metadata, "message metadata") : null;
       const message: MessageRow = {
         id: newId("msg"),
         runId: input.runId,
         role: input.role,
         content: input.content,
         toolCallId: input.toolCallId ?? null,
+        metadata: metadata?.value ?? null,
         createdAt: nowIso(),
       };
 
       this.db
-        .prepare("insert into messages (id, run_id, role, content, tool_call_id, created_at) values (?, ?, ?, ?, ?, ?)")
-        .run(message.id, message.runId, message.role, message.content, message.toolCallId, message.createdAt);
+        .prepare(
+          "insert into messages (id, run_id, role, content, tool_call_id, metadata_json, created_at) values (?, ?, ?, ?, ?, ?, ?)",
+        )
+        .run(
+          message.id,
+          message.runId,
+          message.role,
+          message.content,
+          message.toolCallId,
+          metadata?.json ?? null,
+          message.createdAt,
+        );
       this.events.append(
         "message.created",
         { runId: message.runId, messageId: message.id, role: message.role, toolCallId: message.toolCallId },
@@ -226,7 +275,7 @@ export class RunStore {
   listMessages(runId: string): MessageRow[] {
     return this.db
       .prepare(
-        `select id, run_id, role, content, tool_call_id, created_at
+        `select id, run_id, role, content, tool_call_id, metadata_json, created_at
          from messages
          where run_id = ?
          order by created_at, id`,
@@ -266,6 +315,17 @@ export class RunStore {
     return row ? mapSnapshotRow(row as SnapshotDbRow) : undefined;
   }
 
+  private getStep(id: string): StepRow | undefined {
+    const row = this.db
+      .prepare(
+        `select id, run_id, "index", kind, status, title, created_at, started_at, completed_at
+         from steps
+         where id = ?`,
+      )
+      .get(id);
+    return row ? mapStepRow(row as StepDbRow) : undefined;
+  }
+
   private nextStepIndex(runId: string): number {
     const row = this.db.prepare('select coalesce(max("index"), -1) + 1 as next_index from steps where run_id = ?').get(
       runId,
@@ -294,7 +354,22 @@ function mapMessageRow(row: MessageDbRow): MessageRow {
     role: row.role,
     content: row.content,
     toolCallId: row.tool_call_id,
+    metadata: row.metadata_json ? (JSON.parse(row.metadata_json) as JsonObject) : null,
     createdAt: row.created_at,
+  };
+}
+
+function mapStepRow(row: StepDbRow): StepRow {
+  return {
+    id: row.id,
+    runId: row.run_id,
+    index: row.index,
+    kind: row.kind,
+    status: row.status,
+    title: row.title,
+    createdAt: row.created_at,
+    startedAt: row.started_at,
+    completedAt: row.completed_at,
   };
 }
 

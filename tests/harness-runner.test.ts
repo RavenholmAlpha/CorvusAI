@@ -140,11 +140,30 @@ describe("HarnessRunner", () => {
       "tool",
       "assistant",
     ]);
+    expect(runs.listMessages(result.runId)[1]).toMatchObject({
+      role: "assistant",
+      metadata: {
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "echo", arguments: JSON.stringify({ text: "hi" }) },
+          },
+        ],
+      },
+    });
     expect(runs.listMessages(result.runId)[2]).toMatchObject({
       role: "tool",
       toolCallId: "call_1",
+      metadata: {
+        name: "echo",
+        tool_call_id: "call_1",
+      },
       content: expect.stringContaining("hi"),
     });
+    expect(
+      db.prepare("select status from steps where run_id = ? order by \"index\"").all(result.runId),
+    ).toEqual([{ status: "succeeded" }, { status: "succeeded" }, { status: "succeeded" }]);
     expect(db.prepare("select tool_name, status, result_json, error from tool_calls").all()).toEqual([
       {
         tool_name: "echo",
@@ -241,6 +260,12 @@ describe("HarnessRunner", () => {
       toolCallId: "call_needs_approval",
       content: expect.stringContaining("approval_required"),
     });
+    expect(
+      db.prepare("select kind, status from steps where run_id = ? order by \"index\"").all(result.runId),
+    ).toEqual([
+      { kind: "model", status: "succeeded" },
+      { kind: "tool", status: "interrupted" },
+    ]);
     expect(db.prepare("select tool_name, status, started_at, completed_at from tool_calls").all()).toEqual([
       {
         tool_name: "echo",
@@ -253,6 +278,202 @@ describe("HarnessRunner", () => {
     expect(events.listEvents(result.runId).map((event) => event.type)).toEqual(
       expect.arrayContaining(["approval.created", "tool_call.approval_required", "run.status_changed"]),
     );
+  });
+
+  it("fails before executing tool calls when the next tool round would exceed maxToolRounds", async () => {
+    const { config, events, runs, evidence, queue, tools } = await createHarness((current) => {
+      current.maxToolRounds = 0;
+    });
+    let executions = 0;
+    tools.register(
+      echoTool("local", () => {
+        executions += 1;
+        return { ok: true, output: "should not execute" };
+      }),
+    );
+    const model = {
+      createChatCompletion: async (): Promise<ChatCompletionResponse> => ({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_over_limit",
+                  type: "function",
+                  function: { name: "echo", arguments: JSON.stringify({ text: "too far" }) },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    await expect(runner.runTurn("round limit")).rejects.toThrow("Tool loop exceeded maxToolRounds=0");
+
+    const run = runs.listRuns()[0];
+    expect(run).toMatchObject({ status: "failed" });
+    expect(executions).toBe(0);
+    expect(evidence.listEvidence(run.id)).toEqual([
+      expect.objectContaining({
+        sourceType: "model_error",
+        summary: "Tool loop exceeded maxToolRounds=0",
+      }),
+    ]);
+    expect(events.listEvents(run.id).map((event) => event.type)).toContain("model.error");
+    expect(events.listEvents(run.id).map((event) => event.type)).not.toContain("model_error");
+    expect(events.listEvents(run.id).filter((event) => event.type === "tool_call.created")).toEqual([]);
+  });
+
+  it("returns unknown tool and malformed argument failures as durable tool messages so the model can self-correct", async () => {
+    const { db, config, events, runs, evidence, queue, tools } = await createHarness();
+    tools.register(echoTool());
+    const requests: ChatCompletionRequest[] = [];
+    const model = {
+      createChatCompletion: async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return {
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_unknown",
+                      type: "function",
+                      function: { name: "missing_tool", arguments: "{}" },
+                    },
+                    {
+                      id: "call_bad_json",
+                      type: "function",
+                      function: { name: "echo", arguments: "{not json" },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+        expect(request.messages).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "tool",
+              tool_call_id: "call_unknown",
+              name: "missing_tool",
+              content: expect.stringContaining("Unknown tool: missing_tool"),
+            }),
+            expect.objectContaining({
+              role: "tool",
+              tool_call_id: "call_bad_json",
+              name: "echo",
+              content: expect.stringContaining("Expected property name"),
+            }),
+          ]),
+        );
+        return { choices: [{ message: { role: "assistant", content: "corrected" } }] };
+      },
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    const result = await runner.runTurn("recover from tool errors");
+
+    expect(result.message.content).toBe("corrected");
+    expect(runs.getRun(result.runId)?.status).toBe("succeeded");
+    expect(runs.listMessages(result.runId).map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "tool",
+      "assistant",
+    ]);
+    expect(runs.listMessages(result.runId)[2]).toMatchObject({
+      role: "tool",
+      toolCallId: "call_unknown",
+      metadata: { name: "missing_tool", tool_call_id: "call_unknown" },
+      content: expect.stringContaining("Unknown tool: missing_tool"),
+    });
+    expect(runs.listMessages(result.runId)[3]).toMatchObject({
+      role: "tool",
+      toolCallId: "call_bad_json",
+      metadata: { name: "echo", tool_call_id: "call_bad_json" },
+      content: expect.stringContaining("Expected property name"),
+    });
+    expect(db.prepare("select tool_name, status from tool_calls").all()).toEqual([]);
+    expect(
+      db.prepare("select kind, status from steps where run_id = ? order by \"index\"").all(result.runId),
+    ).toEqual([
+      { kind: "model", status: "succeeded" },
+      { kind: "tool", status: "failed" },
+      { kind: "tool", status: "failed" },
+      { kind: "model", status: "succeeded" },
+    ]);
+    expect(evidence.listEvidence(result.runId)).toEqual([]);
+  });
+
+  it("includes prior durable agent turns in later model requests", async () => {
+    const { config, events, runs, evidence, queue, tools } = await createHarness();
+    const requests: ChatCompletionRequest[] = [];
+    const model = {
+      createChatCompletion: async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+        requests.push(request);
+        return {
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: requests.length === 1 ? "first durable reply" : "second durable reply",
+              },
+            },
+          ],
+        };
+      },
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+    const agent = new CorvusAgent({ config, tools, model, runner });
+
+    await agent.send("first durable question");
+    await agent.send("second durable question");
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.messages).toEqual([
+      expect.objectContaining({ role: "system" }),
+      { role: "user", content: "first durable question" },
+      { role: "assistant", content: "first durable reply" },
+      { role: "user", content: "second durable question" },
+    ]);
+    expect(agent.history()).toEqual([
+      expect.objectContaining({ role: "system" }),
+      { role: "user", content: "first durable question" },
+      { role: "assistant", content: "first durable reply" },
+      { role: "user", content: "second durable question" },
+      { role: "assistant", content: "second durable reply" },
+    ]);
+  });
+
+  it("records model failures with a dotted model.error event and no running model step", async () => {
+    const { db, config, events, runs, evidence, queue, tools } = await createHarness();
+    const model = {
+      createChatCompletion: async (): Promise<ChatCompletionResponse> => {
+        throw new Error("model unavailable");
+      },
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    await expect(runner.runTurn("fail model")).rejects.toThrow("model unavailable");
+
+    const run = runs.listRuns()[0];
+    expect(run).toMatchObject({ status: "failed" });
+    expect(events.listEvents(run.id).map((event) => event.type)).toContain("model.error");
+    expect(events.listEvents(run.id).map((event) => event.type)).not.toContain("model_error");
+    expect(evidence.listEvidence(run.id)).toEqual([
+      expect.objectContaining({ sourceType: "model_error", summary: "model unavailable" }),
+    ]);
+    expect(db.prepare("select status from steps where run_id = ?").all(run.id)).toEqual([{ status: "failed" }]);
   });
 
   it("lets CorvusAgent delegate send through a durable runner while maintaining agent history", async () => {

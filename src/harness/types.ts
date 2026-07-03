@@ -65,6 +65,7 @@ export interface MessageRow {
   role: ChatRole;
   content: string | null;
   toolCallId: string | null;
+  metadata: JsonObject | null;
   createdAt: string;
 }
 

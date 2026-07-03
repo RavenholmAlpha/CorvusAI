@@ -34,6 +34,9 @@ function ensureCompatibilityColumns(db: CorvusDatabase, createdAt: string): void
     db.exec("alter table steps add column created_at text not null default '1970-01-01T00:00:00.000Z'");
     db.prepare("update steps set created_at = coalesce(started_at, ?)").run(createdAt);
   }
+  if (tableExists(db, "messages") && !tableHasColumn(db, "messages", "metadata_json")) {
+    db.exec("alter table messages add column metadata_json text");
+  }
 }
 
 function shouldRebuildColumn(db: CorvusDatabase, table: string, column: string): boolean {

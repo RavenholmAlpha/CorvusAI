@@ -136,9 +136,60 @@ describe("database migrations", () => {
       expect(tableColumns(db, table), `${table} should include created_at`).toContain("created_at");
     }
     expect(tableColumns(db, "schema_migrations")).toContain("applied_at");
+    expect(tableColumns(db, "messages")).toContain("metadata_json");
     expect(db.prepare("select created_at, applied_at from schema_migrations where version = 1").get()).toEqual({
       created_at: expect.any(String),
       applied_at: expect.any(String),
+    });
+
+    db.close();
+  });
+
+  it("adds nullable message metadata to upgraded databases while preserving existing messages", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
+    roots.push(root);
+    const db = openTestDatabase(join(root, "upgraded-messages.db"));
+    const createdAt = "2026-07-02T00:00:00.000Z";
+
+    db.exec(`
+      create table runs (
+        id text primary key,
+        status text not null,
+        goal text not null,
+        model text not null,
+        endpoint text not null,
+        created_at text not null,
+        updated_at text not null,
+        completed_at text
+      );
+
+      create table messages (
+        id text primary key,
+        run_id text not null references runs(id) on delete cascade,
+        role text not null,
+        content text,
+        tool_call_id text,
+        created_at text not null
+      );
+    `);
+    db
+      .prepare(
+        `insert into runs
+          (id, status, goal, model, endpoint, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run("run_with_message", "created", "message migration", "test-model", "https://example.test/v1", createdAt, createdAt);
+    db
+      .prepare("insert into messages (id, run_id, role, content, tool_call_id, created_at) values (?, ?, ?, ?, ?, ?)")
+      .run("msg_existing", "run_with_message", "assistant", "hello", null, createdAt);
+
+    ensureDatabase(db);
+    ensureDatabase(db);
+
+    expect(tableColumns(db, "messages")).toContain("metadata_json");
+    expect(db.prepare("select content, metadata_json from messages where id = ?").get("msg_existing")).toEqual({
+      content: "hello",
+      metadata_json: null,
     });
 
     db.close();

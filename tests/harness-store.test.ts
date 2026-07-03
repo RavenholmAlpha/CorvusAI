@@ -425,6 +425,62 @@ describe("durable harness stores", () => {
     ]);
   });
 
+  it("persists message metadata and updates step status with lifecycle events", async () => {
+    const { events, runs } = await createStores();
+    const run = runs.createRun({ goal: "metadata", model: "test-model", endpoint: "https://example.test/v1" });
+    const step = runs.createStep({ runId: run.id, kind: "model", status: "running", title: "Model turn" });
+    const assistantMessage = runs.appendMessage({
+      runId: run.id,
+      role: "assistant",
+      content: null,
+      metadata: {
+        tool_calls: [
+          {
+            id: "call_1",
+            type: "function",
+            function: { name: "echo", arguments: "{\"text\":\"hi\"}" },
+          },
+        ],
+      },
+    });
+
+    const updatedStep = runs.updateStepStatus(step.id, "succeeded");
+
+    expect(runs.listMessages(run.id)).toEqual([
+      expect.objectContaining({
+        id: assistantMessage.id,
+        role: "assistant",
+        content: null,
+        metadata: {
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "echo", arguments: "{\"text\":\"hi\"}" },
+            },
+          ],
+        },
+      }),
+    ]);
+    expect(updatedStep).toMatchObject({
+      id: step.id,
+      status: "succeeded",
+      startedAt: step.startedAt,
+      completedAt: expect.any(String),
+    });
+    expect(events.listEvents(run.id).map((event) => event.type)).toEqual([
+      "run.created",
+      "step.created",
+      "message.created",
+      "step.status_changed",
+    ]);
+    expect(events.listEvents(run.id)[3]?.payload).toMatchObject({
+      stepId: step.id,
+      previousStatus: "running",
+      status: "succeeded",
+    });
+  });
+
   it("rejects unsupported snapshot values before inserting a snapshot or event", async () => {
     const { db, runs } = await createStores();
     const run = runs.createRun({ goal: "bad snapshots", model: "test-model", endpoint: "https://example.test/v1" });

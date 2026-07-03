@@ -37,6 +37,7 @@ create table if not exists messages (
   role text not null,
   content text,
   tool_call_id text,
+  metadata_json text,
   created_at text not null
 );
 
