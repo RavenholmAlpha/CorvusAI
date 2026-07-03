@@ -11,6 +11,7 @@ import {
   nowIso,
   serializeDurableJson,
   serializeDurableJsonObject,
+  type EvidenceSourceType,
   type ToolCallRow,
   type ToolCallStatus,
 } from "./types.js";
@@ -70,6 +71,10 @@ interface ApprovedApprovalRow {
   status: string;
 }
 
+interface EvidenceIdRow {
+  id: string;
+}
+
 export class ToolQueue {
   constructor(
     private readonly db: CorvusDatabase,
@@ -103,7 +108,7 @@ export class ToolQueue {
       return this.denyToolCall(toolCall, `Tool ${input.tool.name} denied by permission policy`);
     }
 
-    return this.executeToolCall(toolCall, input.tool, args);
+    return this.executeToolCall(toolCall, input.tool, args, "pending");
   }
 
   async runApproved(toolCallId: string, tool: ToolManifest): Promise<ToolQueueResult> {
@@ -111,11 +116,14 @@ export class ToolQueue {
     if (!toolCall) {
       throw new Error(`Tool call not found: ${toolCallId}`);
     }
+    this.assertToolMatches(toolCall, tool);
+
+    const replayed = this.replayTerminalToolCall(toolCall, tool);
+    if (replayed) {
+      return replayed;
+    }
     if (toolCall.status !== "approval_required") {
       throw new Error(`Tool call ${toolCallId} is not waiting for approval`);
-    }
-    if (toolCall.toolName !== tool.name) {
-      throw new Error(`Tool call ${toolCallId} is for ${toolCall.toolName}, not ${tool.name}`);
     }
 
     const approval = this.db
@@ -126,7 +134,7 @@ export class ToolQueue {
     }
 
     const args = validateToolInput(tool, toolCall.arguments);
-    return this.executeToolCall(toolCall, tool, args);
+    return this.executeToolCall(toolCall, tool, args, "approval_required");
   }
 
   recoverInterrupted(): ToolCallRow[] {
@@ -145,9 +153,12 @@ export class ToolQueue {
       const recovered: ToolCallRow[] = [];
       for (const toolCall of running) {
         const completedAt = nowIso();
-        this.db
-          .prepare("update tool_calls set status = ?, error = ?, completed_at = ? where id = ?")
+        const update = this.db
+          .prepare("update tool_calls set status = ?, error = ?, completed_at = ? where id = ? and status = 'running'")
           .run("interrupted", "Tool call interrupted during recovery", completedAt, toolCall.id);
+        if (update.changes === 0) {
+          continue;
+        }
         const updated = this.getToolCall(toolCall.id);
         if (!updated) {
           throw new Error(`Tool call not found after recovery: ${toolCall.id}`);
@@ -264,12 +275,27 @@ export class ToolQueue {
     toolCall: ToolCallRow,
     tool: ToolManifest,
     args: ToolInputObject,
+    expectedStatus: ToolCallStatus,
   ): Promise<ToolQueueResult> {
-    this.markRunning(toolCall);
+    const runningToolCall = this.markRunning(toolCall, expectedStatus);
+    if (!runningToolCall) {
+      const current = this.getToolCall(toolCall.id);
+      if (!current) {
+        throw new Error(`Tool call not found after claim failed: ${toolCall.id}`);
+      }
+      this.assertToolMatches(current, tool);
+      const replayed = this.replayTerminalToolCall(current, tool);
+      if (replayed) {
+        return replayed;
+      }
+      throw new Error(
+        `Tool call ${toolCall.id} could not be claimed from ${expectedStatus}; current status is ${current.status}`,
+      );
+    }
     try {
-      const result = limitToolOutput(await this.executeWithTimeout(toolCall, tool, args), tool.outputLimitBytes);
+      const result = limitToolOutput(await this.executeWithTimeout(runningToolCall, tool, args), tool.outputLimitBytes);
       if (!result.ok) {
-        return this.failToolCall(toolCall, result.error, result, tool.evidencePolicy);
+        return this.failToolCall(runningToolCall, result.error, result, tool.evidencePolicy);
       }
 
       const resultJson = serializeDurableJsonObject(result as unknown as Record<string, unknown>, "tool result");
@@ -277,36 +303,41 @@ export class ToolQueue {
       this.db.transaction(() => {
         this.db
           .prepare("update tool_calls set status = ?, result_json = ?, error = null, completed_at = ? where id = ?")
-          .run("succeeded", resultJson.json, completedAt, toolCall.id);
+          .run("succeeded", resultJson.json, completedAt, runningToolCall.id);
         this.events.append(
           "tool_call.succeeded",
           {
-            runId: toolCall.runId,
-            toolCallId: toolCall.id,
-            toolName: toolCall.toolName,
+            runId: runningToolCall.runId,
+            toolCallId: runningToolCall.id,
+            toolName: runningToolCall.toolName,
           },
-          toolCall.runId,
+          runningToolCall.runId,
         );
       })();
-      const evidenceId = this.createResultEvidence(toolCall, tool, result);
+      const evidenceId = this.createResultEvidence(runningToolCall, tool, result);
       return {
-        toolCallId: toolCall.id,
+        toolCallId: runningToolCall.id,
         status: "succeeded",
         result,
         output: result.output,
         ...(evidenceId ? { evidenceId } : {}),
       };
     } catch (error) {
-      return this.failToolCall(toolCall, (error as Error).message, undefined, tool.evidencePolicy);
+      return this.failToolCall(runningToolCall, (error as Error).message, undefined, tool.evidencePolicy);
     }
   }
 
-  private markRunning(toolCall: ToolCallRow): void {
-    this.db.transaction(() => {
+  private markRunning(toolCall: ToolCallRow, expectedStatus: ToolCallStatus): ToolCallRow | undefined {
+    return this.db.transaction(() => {
       const startedAt = nowIso();
-      this.db
-        .prepare("update tool_calls set status = ?, started_at = ?, completed_at = null, error = null where id = ?")
-        .run("running", startedAt, toolCall.id);
+      const update = this.db
+        .prepare(
+          "update tool_calls set status = ?, started_at = ?, completed_at = null, error = null where id = ? and status = ?",
+        )
+        .run("running", startedAt, toolCall.id, expectedStatus);
+      if (update.changes === 0) {
+        return undefined;
+      }
       this.events.append(
         "tool_call.running",
         {
@@ -316,6 +347,11 @@ export class ToolQueue {
         },
         toolCall.runId,
       );
+      const updated = this.getToolCall(toolCall.id);
+      if (!updated) {
+        throw new Error(`Tool call not found after claim: ${toolCall.id}`);
+      }
+      return updated;
     })();
   }
 
@@ -462,6 +498,76 @@ export class ToolQueue {
       .get(id);
     return row ? mapToolCallRow(row as ToolCallDbRow) : undefined;
   }
+
+  private assertToolMatches(toolCall: ToolCallRow, tool: ToolManifest): void {
+    if (toolCall.toolName !== tool.name) {
+      throw new Error(`Tool call ${toolCall.id} is for ${toolCall.toolName}, not ${tool.name}`);
+    }
+    if (toolCall.capability !== tool.capability) {
+      throw new Error(`Tool call ${toolCall.id} requires capability ${toolCall.capability}, not ${tool.capability}`);
+    }
+  }
+
+  private replayTerminalToolCall(toolCall: ToolCallRow, tool: ToolManifest): ToolQueueResult | undefined {
+    if (toolCall.status === "succeeded") {
+      if (!toolCall.result) {
+        throw new Error(`Tool call ${toolCall.id} succeeded without a stored result`);
+      }
+      const result = normalizeToolResult(toolCall.result as ToolRunResult);
+      if (!result.ok) {
+        throw new Error(`Tool call ${toolCall.id} stored a non-success result for succeeded status`);
+      }
+      const evidenceId = this.findLatestEvidenceId(toolCall.id, ["tool_result"]);
+      return {
+        toolCallId: toolCall.id,
+        status: "succeeded",
+        result,
+        output: result.output,
+        ...(evidenceId ? { evidenceId } : {}),
+      };
+    }
+
+    if (toolCall.status === "failed") {
+      const result = toolCall.result ? normalizeToolResult(toolCall.result as ToolRunResult) : undefined;
+      const evidenceId = this.findLatestEvidenceId(toolCall.id, ["tool_error"]);
+      return {
+        toolCallId: toolCall.id,
+        status: "failed",
+        error: toolCall.error ?? `Tool ${tool.name} failed`,
+        ...(result ? { result } : {}),
+        ...(evidenceId ? { evidenceId } : {}),
+      };
+    }
+
+    if (toolCall.status === "denied") {
+      const evidenceId = this.findLatestEvidenceId(toolCall.id, ["permission_denial"]);
+      if (!evidenceId) {
+        throw new Error(`Tool call ${toolCall.id} was denied without denial evidence`);
+      }
+      return {
+        toolCallId: toolCall.id,
+        status: "denied",
+        error: toolCall.error ?? `Tool ${tool.name} denied`,
+        evidenceId,
+      };
+    }
+
+    return undefined;
+  }
+
+  private findLatestEvidenceId(toolCallId: string, sourceTypes: EvidenceSourceType[]): string | undefined {
+    const placeholders = sourceTypes.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `select id
+         from evidence
+         where source_id = ? and source_type in (${placeholders})
+         order by created_at desc, id desc
+         limit 1`,
+      )
+      .get(toolCallId, ...sourceTypes) as EvidenceIdRow | undefined;
+    return row?.id;
+  }
 }
 
 function mapToolCallRow(row: ToolCallDbRow): ToolCallRow {
@@ -515,7 +621,17 @@ function truncateUtf8(value: string, maxBytes: number): string {
   if (maxBytes <= 0) {
     return "";
   }
-  return Buffer.from(value, "utf8").subarray(0, maxBytes).toString("utf8");
+  let preview = "";
+  let bytes = 0;
+  for (const codePoint of value) {
+    const codePointBytes = Buffer.byteLength(codePoint, "utf8");
+    if (bytes + codePointBytes > maxBytes) {
+      break;
+    }
+    preview += codePoint;
+    bytes += codePointBytes;
+  }
+  return preview;
 }
 
 function summarizeValue(value: unknown): string {

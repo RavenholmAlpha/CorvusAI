@@ -50,7 +50,7 @@ async function createHarness(configurePolicy?: (policy: PermissionPolicy) => voi
   const evidence = new EvidenceStore(db, events);
   const policy = createDefaultPolicy();
   configurePolicy?.(policy);
-  const approvals = new ApprovalService(db, events, policy);
+  const approvals = new ApprovalService(db, events, policy, evidence);
   const queue = new ToolQueue(db, events, evidence, approvals);
   const run = runs.createRun({ goal: "queue", model: "test-model", endpoint: "https://example.test/v1" });
   const step = runs.createStep({ runId: run.id, kind: "tool", status: "running", title: "Tool call" });
@@ -87,6 +87,24 @@ function askTool(execute: ToolManifest["execute"]): ToolManifest {
     version: "1.0.0",
     description: "Needs approval",
     capability: "process",
+    risk: "high",
+    parameters: { type: "object", properties: {}, additionalProperties: false },
+    timeoutMs: 1000,
+    outputLimitBytes: 1000,
+    concurrency: { perTool: 1, perRun: 1, global: 1 },
+    evidencePolicy: "summary",
+    resources: [],
+    execute,
+  });
+}
+
+function approvalTool(capability: string, execute: ToolManifest["execute"]): ToolManifest {
+  return createToolManifest({
+    name: "needs_approval",
+    namespace: "test",
+    version: "1.0.0",
+    description: "Needs approval",
+    capability,
     risk: "high",
     parameters: { type: "object", properties: {}, additionalProperties: false },
     timeoutMs: 1000,
@@ -199,6 +217,131 @@ describe("ToolQueue", () => {
     expect(events.listEvents(run.id).map((event) => event.type)).toEqual(
       expect.arrayContaining(["approval.created", "approval.approved", "tool_call.succeeded"]),
     );
+  });
+
+  it("denying a pending approval transitions the tool call to denied and records denial evidence", async () => {
+    const { db, events, evidence, approvals, queue, run, step } = await createHarness();
+    let executions = 0;
+    const tool = askTool(() => {
+      executions += 1;
+      return { ok: true, output: "should not run", summary: "should not run" };
+    });
+
+    const pending = await queue.enqueueAndRun({ runId: run.id, stepId: step.id, tool, args: {} });
+
+    expect(pending.status).toBe("approval_required");
+    if (pending.status !== "approval_required") {
+      throw new Error(`Expected approval_required, got ${pending.status}`);
+    }
+
+    approvals.resolveApproval(pending.approvalId, "denied", "never");
+
+    expect(db.prepare("select status, error, completed_at from tool_calls where id = ?").get(pending.toolCallId)).toEqual({
+      status: "denied",
+      error: "Tool needs_approval denied by approval decision",
+      completed_at: expect.any(String),
+    });
+    expect(events.listEvents(run.id).map((event) => event.type)).toEqual(
+      expect.arrayContaining(["approval.denied", "tool_call.denied"]),
+    );
+    expect(evidence.listEvidence(run.id)).toEqual([
+      expect.objectContaining({
+        sourceType: "permission_denial",
+        sourceId: pending.toolCallId,
+        summary: "Tool needs_approval denied by approval decision",
+      }),
+    ]);
+
+    const rerun = await queue.runApproved(pending.toolCallId, tool).catch((error: unknown) => error);
+    if (!(rerun instanceof Error)) {
+      expect(rerun).toMatchObject({
+        toolCallId: pending.toolCallId,
+        status: "denied",
+        error: "Tool needs_approval denied by approval decision",
+      });
+    }
+    expect(executions).toBe(0);
+  });
+
+  it("keeps terminal approval decisions idempotent and rejects conflicting or pending re-resolution", async () => {
+    const { db, approvals, queue, policy, run, step } = await createHarness();
+    const tool = askTool(() => ({ ok: true, output: "approved", summary: "approved" }));
+    const pending = await queue.enqueueAndRun({ runId: run.id, stepId: step.id, tool, args: {} });
+
+    expect(pending.status).toBe("approval_required");
+    if (pending.status !== "approval_required") {
+      throw new Error(`Expected approval_required, got ${pending.status}`);
+    }
+
+    const approved = approvals.resolveApproval(pending.approvalId, "approved", "always");
+    const repeated = approvals.resolveApproval(pending.approvalId, "approved", "always");
+
+    expect(repeated).toMatchObject({
+      id: approved.id,
+      status: "approved",
+      decisionScope: "always",
+      decidedAt: approved.decidedAt,
+    });
+    expect(approvals.decideToolPermission("needs_approval", "process")).toBe("allow");
+
+    expect(() => approvals.resolveApproval(pending.approvalId, "pending", "once")).toThrow(/already resolved/i);
+    expect(() => approvals.resolveApproval(pending.approvalId, "denied", "never")).toThrow(/already resolved/i);
+    expect(approvals.decideToolPermission("needs_approval", "process")).toBe("allow");
+    expect(policy.rules["tool:needs_approval"]).toBe("allow");
+    expect(db.prepare("select status, decision_scope from approvals where id = ?").get(pending.approvalId)).toEqual({
+      status: "approved",
+      decision_scope: "always",
+    });
+  });
+
+  it("replays a successful approved tool call without executing it again", async () => {
+    const { evidence, approvals, queue, run, step } = await createHarness();
+    let executions = 0;
+    const tool = askTool(() => {
+      executions += 1;
+      return { ok: true, output: "approved once", summary: "approved once" };
+    });
+    const pending = await queue.enqueueAndRun({ runId: run.id, stepId: step.id, tool, args: {} });
+
+    expect(pending.status).toBe("approval_required");
+    if (pending.status !== "approval_required") {
+      throw new Error(`Expected approval_required, got ${pending.status}`);
+    }
+
+    approvals.resolveApproval(pending.approvalId, "approved", "once");
+    const first = await queue.runApproved(pending.toolCallId, tool);
+    const second = await queue.runApproved(pending.toolCallId, tool);
+
+    expect(first.status).toBe("succeeded");
+    expect(second).toMatchObject({
+      toolCallId: pending.toolCallId,
+      status: "succeeded",
+      output: "approved once",
+      evidenceId: first.status === "succeeded" ? first.evidenceId : undefined,
+    });
+    expect(executions).toBe(1);
+    expect(evidence.listEvidence(run.id)).toHaveLength(1);
+  });
+
+  it("rejects an approved rerun when the tool capability does not match the stored call", async () => {
+    const { approvals, queue, run, step } = await createHarness();
+    const original = approvalTool("process", () => ({ ok: true, output: "original", summary: "original" }));
+    let impostorExecutions = 0;
+    const impostor = approvalTool("network", () => {
+      impostorExecutions += 1;
+      return { ok: true, output: "impostor", summary: "impostor" };
+    });
+    const pending = await queue.enqueueAndRun({ runId: run.id, stepId: step.id, tool: original, args: {} });
+
+    expect(pending.status).toBe("approval_required");
+    if (pending.status !== "approval_required") {
+      throw new Error(`Expected approval_required, got ${pending.status}`);
+    }
+
+    approvals.resolveApproval(pending.approvalId, "approved", "once");
+
+    await expect(queue.runApproved(pending.toolCallId, impostor)).rejects.toThrow(/capability/i);
+    expect(impostorExecutions).toBe(0);
   });
 
   it("denies a blocked tool without executing it and creates permission denial evidence", async () => {
@@ -347,5 +490,86 @@ describe("ToolQueue", () => {
     expect(events.listEvents(run.id).map((event) => event.type)).toEqual(
       expect.arrayContaining(["tool_call.interrupted", "recovery.interrupted_tool_call"]),
     );
+  });
+
+  it("recoverInterrupted skips a call that is no longer running when the recovery update is attempted", async () => {
+    const { db, events, queue, run, step } = await createHarness();
+    const createdAt = "2026-07-03T00:00:00.000Z";
+    db.prepare(
+      `insert into tool_calls
+        (id, run_id, step_id, tool_name, capability, status, arguments_json, result_json, error, timeout_ms, created_at, started_at, completed_at)
+       values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run("tool_race", run.id, step.id, "sleep", "local", "running", "{}", null, null, 1000, createdAt, createdAt, null);
+
+    const originalPrepare = db.prepare.bind(db);
+    let changedBeforeRecoveryUpdate = false;
+    (db as CorvusDatabase & { prepare: CorvusDatabase["prepare"] }).prepare = ((source: string) => {
+      const statement = originalPrepare(source);
+      if (source.includes("update tool_calls set status = ?, error = ?, completed_at = ? where id = ?")) {
+        return new Proxy(statement, {
+          get(target, property, receiver) {
+            if (property !== "run") {
+              return Reflect.get(target, property, receiver);
+            }
+            return (...params: unknown[]) => {
+              if (!changedBeforeRecoveryUpdate && params.at(-1) === "tool_race") {
+                changedBeforeRecoveryUpdate = true;
+                originalPrepare(
+                  "update tool_calls set status = ?, result_json = ?, error = null, completed_at = ? where id = ?",
+                ).run("succeeded", "{}", createdAt, "tool_race");
+              }
+              return target.run(...(params as Parameters<typeof target.run>));
+            };
+          },
+        });
+      }
+      return statement;
+    }) as CorvusDatabase["prepare"];
+
+    try {
+      expect(queue.recoverInterrupted()).toEqual([]);
+    } finally {
+      (db as CorvusDatabase & { prepare: CorvusDatabase["prepare"] }).prepare = originalPrepare as CorvusDatabase["prepare"];
+    }
+
+    expect(changedBeforeRecoveryUpdate).toBe(true);
+    expect(db.prepare("select status, result_json, error, completed_at from tool_calls where id = ?").get("tool_race")).toEqual({
+      status: "succeeded",
+      result_json: "{}",
+      error: null,
+      completed_at: createdAt,
+    });
+    expect(events.listEvents(run.id).map((event) => event.type)).not.toContain("tool_call.interrupted");
+  });
+
+  it("keeps truncated UTF-8 previews within the byte limit without splitting multibyte output", async () => {
+    const { queue, run, step } = await createHarness();
+    const outputLimitBytes = 7;
+    const tool = createToolManifest({
+      name: "emoji",
+      namespace: "test",
+      version: "1.0.0",
+      description: "Emoji output",
+      capability: "local",
+      risk: "low",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+      timeoutMs: 1000,
+      outputLimitBytes,
+      concurrency: { perTool: 1, perRun: 1, global: 1 },
+      evidencePolicy: "summary",
+      resources: [],
+      execute: () => ({ ok: true, output: "😀😀😀", summary: "emoji" }),
+    });
+
+    const result = await queue.enqueueAndRun({ runId: run.id, stepId: step.id, tool, args: {} });
+
+    expect(result.status).toBe("succeeded");
+    if (result.status !== "succeeded") {
+      throw new Error(`Expected succeeded, got ${result.status}`);
+    }
+    expect(result.output).toMatchObject({ truncated: true, outputLimitBytes });
+    const preview = (result.output as { preview: string }).preview;
+    expect(Buffer.byteLength(preview, "utf8")).toBeLessThanOrEqual(outputLimitBytes);
+    expect(preview).not.toContain("\uFFFD");
   });
 });

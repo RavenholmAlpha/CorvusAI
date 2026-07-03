@@ -6,6 +6,7 @@ import {
   type PermissionPolicy,
 } from "../permissions.js";
 import type { EventLog } from "./event-log.js";
+import type { EvidenceStore } from "./evidence-store.js";
 import { newId, nowIso, type ApprovalRow, type ApprovalStatus, type DecisionScope } from "./types.js";
 
 export interface CreateApprovalInput {
@@ -25,6 +26,13 @@ interface ApprovalDbRow {
   decided_at: string | null;
 }
 
+interface ApprovalToolCallDbRow {
+  id: string;
+  run_id: string;
+  tool_name: string;
+  status: string;
+}
+
 const approvalStatuses = new Set<ApprovalStatus>(["pending", "approved", "denied", "expired"]);
 const decisionScopes = new Set<DecisionScope>(["once", "always", "never"]);
 
@@ -33,6 +41,7 @@ export class ApprovalService {
     private readonly db: CorvusDatabase,
     private readonly events: EventLog,
     private readonly policy: PermissionPolicy,
+    private readonly evidence: EvidenceStore,
   ) {}
 
   decideToolPermission(toolName: string, capability: string): PermissionDecision {
@@ -100,8 +109,19 @@ export class ApprovalService {
       if (!existing) {
         throw new Error(`Approval not found: ${id}`);
       }
+      if (existing.status !== "pending") {
+        if (existing.status === status && existing.decisionScope === decisionScope) {
+          return existing;
+        }
+        throw new Error(
+          `Approval ${id} is already resolved as ${existing.status} with scope ${existing.decisionScope}`,
+        );
+      }
+      if (status === "pending") {
+        throw new Error("Approval resolution must be terminal");
+      }
 
-      const decidedAt = status === "pending" ? null : nowIso();
+      const decidedAt = nowIso();
       this.db
         .prepare("update approvals set status = ?, decision_scope = ?, decided_at = ? where id = ?")
         .run(status, decisionScope, decidedAt, id);
@@ -111,18 +131,20 @@ export class ApprovalService {
         throw new Error(`Approval not found after update: ${id}`);
       }
 
-      if (decisionScope === "always" && updated.toolName) {
-        setPermissionRule(this.policy, `tool:${updated.toolName}`, "allow");
-      } else if (decisionScope === "never" && updated.toolName) {
-        setPermissionRule(this.policy, `tool:${updated.toolName}`, "deny");
-      }
-
       if (status === "approved") {
         this.events.append("approval.approved", approvalEventPayload(updated), updated.runId);
       } else if (status === "denied") {
         this.events.append("approval.denied", approvalEventPayload(updated), updated.runId);
       } else if (status === "expired") {
         this.events.append("approval.expired", approvalEventPayload(updated), updated.runId);
+      }
+      if (status === "denied" || status === "expired") {
+        this.denyToolCallForApproval(updated, status);
+      }
+      if (decisionScope === "always" && updated.toolName) {
+        setPermissionRule(this.policy, `tool:${updated.toolName}`, "allow");
+      } else if (decisionScope === "never" && updated.toolName) {
+        setPermissionRule(this.policy, `tool:${updated.toolName}`, "deny");
       }
 
       return updated;
@@ -139,6 +161,57 @@ export class ApprovalService {
       | { tool_name: string }
       | undefined;
     return row?.tool_name ?? null;
+  }
+
+  private denyToolCallForApproval(approval: ApprovalRow, status: "denied" | "expired"): void {
+    const toolCall = this.db
+      .prepare("select id, run_id, tool_name, status from tool_calls where id = ?")
+      .get(approval.toolCallId) as ApprovalToolCallDbRow | undefined;
+    if (!toolCall) {
+      throw new Error(`Tool call not found for approval ${approval.id}: ${approval.toolCallId}`);
+    }
+    if (toolCall.status === "denied") {
+      return;
+    }
+    if (toolCall.status !== "approval_required") {
+      throw new Error(`Tool call ${toolCall.id} is not waiting for approval; current status is ${toolCall.status}`);
+    }
+
+    const message =
+      status === "expired"
+        ? `Tool ${toolCall.tool_name} approval expired`
+        : `Tool ${toolCall.tool_name} denied by approval decision`;
+    const completedAt = nowIso();
+    const update = this.db
+      .prepare(
+        "update tool_calls set status = ?, error = ?, completed_at = ? where id = ? and status = 'approval_required'",
+      )
+      .run("denied", message, completedAt, toolCall.id);
+    if (update.changes === 0) {
+      const current = this.db.prepare("select status from tool_calls where id = ?").get(toolCall.id) as
+        | { status: string }
+        | undefined;
+      throw new Error(`Tool call ${toolCall.id} was not denied; current status is ${current?.status ?? "missing"}`);
+    }
+
+    this.events.append(
+      "tool_call.denied",
+      {
+        runId: toolCall.run_id,
+        toolCallId: toolCall.id,
+        toolName: toolCall.tool_name,
+        error: message,
+      },
+      toolCall.run_id,
+    );
+    this.evidence.createEvidence({
+      runId: toolCall.run_id,
+      sourceType: "permission_denial",
+      sourceId: toolCall.id,
+      title: `Tool ${toolCall.tool_name} denied`,
+      summary: message,
+      content: message,
+    });
   }
 }
 
