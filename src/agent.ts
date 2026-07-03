@@ -1,4 +1,5 @@
 import type { CorvusConfig } from "./config.js";
+import type { HarnessRunner } from "./harness/runner.js";
 import type { ChatCompletionRequest } from "./openai-client.js";
 import type { ToolRegistry } from "./tools/index.js";
 import type { ChatCompletionResponse, ChatMessage, ToolCall } from "./types.js";
@@ -11,6 +12,7 @@ export interface CorvusAgentOptions {
   config: CorvusConfig;
   tools: ToolRegistry;
   model: ChatModel;
+  runner?: HarnessRunner;
 }
 
 export class CorvusAgent {
@@ -25,6 +27,14 @@ export class CorvusAgent {
   }
 
   async send(content: string): Promise<ChatMessage> {
+    if (this.options.runner) {
+      this.refreshSystemPrompt();
+      this.messages.push({ role: "user", content });
+      const result = await this.options.runner.runTurn(content);
+      this.messages.push(result.message);
+      return result.message;
+    }
+
     this.messages.push({ role: "user", content });
 
     for (let round = 0; round <= this.options.config.maxToolRounds; round += 1) {

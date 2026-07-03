@@ -13,3 +13,4 @@ export * from "./harness/run-store.js";
 export * from "./harness/evidence-store.js";
 export * from "./harness/approval-service.js";
 export * from "./harness/tool-queue.js";
+export * from "./harness/runner.js";
