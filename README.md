@@ -22,6 +22,13 @@ Use normal text to chat with the agent. Use slash commands to control runtime st
 - `/permission [tool:name|capability:name] [allow|ask|deny]` manages tool permissions.
 - `/model [name] [--endpoint url] [--api-key-env ENV] [--temperature n]` configures any OpenAI Chat Completions compatible endpoint.
 - `/review [on|off|status]` toggles review instructions in the system prompt.
+- `/runs` lists durable runs.
+- `/run <id>` inspects a durable run, its messages, and latest snapshot.
+- `/cancel <id>` cancels a durable run.
+- `/approvals` lists pending tool approvals.
+- `/approve <id|all>` approves pending tool approvals and resumes approved tool calls when the tool manifest is available.
+- `/deny <id|all>` denies pending tool approvals.
+- `/evidence [id|last]` shows stored evidence.
 - `/tools` lists registered AI-callable tools.
 - `/plugins` lists loaded plugins.
 - `/config` shows runtime configuration.
@@ -29,6 +36,34 @@ Use normal text to chat with the agent. Use slash commands to control runtime st
 - `/exit` quits the TUI.
 
 Configuration is persisted to `.corvus/config.json`.
+
+## Durable Harness
+
+Corvus stores durable local run state in `.corvus/corvus.db`.
+
+The harness records:
+
+- runs
+- steps
+- messages
+- tool calls
+- approvals
+- evidence
+- append-only events
+- state snapshots
+
+Useful durable commands:
+
+- `/runs`
+- `/run <id>`
+- `/resume <id>`
+- `/cancel <id>`
+- `/approvals`
+- `/approve <id|all>`
+- `/deny <id|all>`
+- `/evidence [id|last]`
+
+Tool calls run through the durable queue. Permission `ask` decisions pause the run and create an approval record. Tool outputs, tool failures, model failures, and denials create evidence for later inspection.
 
 ## Settings Menu
 
