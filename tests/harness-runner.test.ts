@@ -280,6 +280,72 @@ describe("HarnessRunner", () => {
     );
   });
 
+  it("resumes a waiting run after approval by continuing with the approved tool result", async () => {
+    const { config, events, runs, evidence, approvals, queue, tools } = await createHarness();
+    tools.register(echoTool("process"));
+    const requests: ChatCompletionRequest[] = [];
+    const model = {
+      createChatCompletion: async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return {
+            choices: [
+              {
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "call_needs_approval",
+                      type: "function",
+                      function: { name: "echo", arguments: JSON.stringify({ text: "approved" }) },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+
+        const resumedToolMessage = request.messages.find(
+          (message) => message.role === "tool" && message.tool_call_id === "call_needs_approval",
+        );
+        expect(resumedToolMessage?.content).toContain("succeeded");
+        expect(resumedToolMessage?.content).toContain("approved");
+        expect(resumedToolMessage?.content).not.toContain("approval_required");
+        return { choices: [{ message: { role: "assistant", content: "resumed done" } }] };
+      },
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    const paused = await runner.runTurn("needs approval");
+    const [approval] = approvals.listPending(paused.runId);
+    approvals.resolveApproval(approval.id, "approved", "once");
+    const tool = tools.list().find((candidate) => candidate.name === "echo");
+    if (!tool) {
+      throw new Error("echo tool missing");
+    }
+    await queue.runApproved(approval.toolCallId, tool);
+
+    const resumed = await runner.resumeRun(paused.runId);
+
+    expect(resumed.message).toMatchObject({ role: "assistant", content: "resumed done" });
+    expect(runs.getRun(paused.runId)?.status).toBe("succeeded");
+    expect(requests).toHaveLength(2);
+    expect(runs.listMessages(paused.runId).map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "tool",
+      "tool",
+      "assistant",
+    ]);
+    expect(runs.listMessages(paused.runId)[3]).toMatchObject({
+      role: "tool",
+      toolCallId: "call_needs_approval",
+      content: expect.stringContaining("succeeded"),
+    });
+  });
+
   it("fails before executing tool calls when the next tool round would exceed maxToolRounds", async () => {
     const { config, events, runs, evidence, queue, tools } = await createHarness((current) => {
       current.maxToolRounds = 0;

@@ -188,6 +188,18 @@ export class ToolQueue {
     })();
   }
 
+  getToolCall(id: string): ToolCallRow | undefined {
+    const row = this.db
+      .prepare(
+        `select id, run_id, step_id, tool_name, capability, status, arguments_json, result_json, error,
+                timeout_ms, created_at, started_at, completed_at
+         from tool_calls
+         where id = ?`,
+      )
+      .get(id);
+    return row ? mapToolCallRow(row as ToolCallDbRow) : undefined;
+  }
+
   private createToolCall(input: EnqueueToolCallInput): ToolCallRow {
     return this.db.transaction(() => {
       const args = serializeDurableJsonObject(input.args, "tool arguments");
@@ -485,18 +497,6 @@ export class ToolQueue {
       content: result ? evidenceContent(evidencePolicy, result, message) : message,
     });
     return evidence.id;
-  }
-
-  private getToolCall(id: string): ToolCallRow | undefined {
-    const row = this.db
-      .prepare(
-        `select id, run_id, step_id, tool_name, capability, status, arguments_json, result_json, error,
-                timeout_ms, created_at, started_at, completed_at
-         from tool_calls
-         where id = ?`,
-      )
-      .get(id);
-    return row ? mapToolCallRow(row as ToolCallDbRow) : undefined;
   }
 
   private assertToolMatches(toolCall: ToolCallRow, tool: ToolManifest): void {

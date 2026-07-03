@@ -32,7 +32,6 @@ export async function main(): Promise<void> {
     const evidence = new EvidenceStore(db, events);
     const approvals = new ApprovalService(db, events, config.permissions, evidence);
     const queue = new ToolQueue(db, events, evidence, approvals);
-    const harness = createCliHarnessAdapter(runs, evidence, approvals, queue);
 
     const loadedPlugins = await loadPlugins(resolve(config.pluginDir), {
       tools,
@@ -41,6 +40,7 @@ export async function main(): Promise<void> {
 
     const client = createConfigBackedChatModel(config);
     const runner = new HarnessRunner({ config, model: client, tools, runs, queue, evidence, events });
+    const harness = createCliHarnessAdapter(runs, evidence, approvals, queue, runner);
     const agent = new CorvusAgent({ config, tools, model: client, runner });
     const tui = new CorvusTui({
       config,
@@ -64,6 +64,7 @@ function createCliHarnessAdapter(
   evidence: EvidenceStore,
   approvals: ApprovalService,
   queue: ToolQueue,
+  runner: HarnessRunner,
 ): DurableHarnessAdapter {
   return {
     listRuns: () => runs.listRuns(),
@@ -79,6 +80,10 @@ function createCliHarnessAdapter(
         return run;
       }
       return runs.updateRunStatus(id, "canceled");
+    },
+    resumeRun: async (id) => {
+      const result = await runner.resumeRun(id);
+      return runs.getRun(result.runId);
     },
     listPendingApprovals: (runId) => approvals.listPending(runId),
     resolveApproval: (id, status, scope) => approvals.resolveApproval(id, status, scope),

@@ -6,7 +6,7 @@ import type { EventLog } from "./event-log.js";
 import type { EvidenceStore } from "./evidence-store.js";
 import type { RunStore } from "./run-store.js";
 import type { ToolQueue, ToolQueueResult } from "./tool-queue.js";
-import type { JsonObject as DurableJsonObject, StepStatus } from "./types.js";
+import type { JsonObject as DurableJsonObject, MessageRow, StepStatus, ToolCallRow } from "./types.js";
 import type { ToolManifest } from "../tools/protocol.js";
 import type { ToolRegistry } from "../tools/index.js";
 
@@ -42,23 +42,100 @@ export class HarnessRunner {
       model: this.options.config.model,
       endpoint: this.options.config.endpoint,
     });
+    this.options.runs.updateRunStatus(run.id, "running");
+    const messages: ChatMessage[] = [
+      this.systemMessage(),
+      ...priorConversation(options.history ?? []),
+      { role: "user", content },
+    ];
+    this.options.runs.appendMessage({ runId: run.id, role: "user", content });
+    this.writeSnapshot(run.id, "user_message", 0, messages);
+    return this.continueRun(run.id, messages);
+  }
+
+  async resumeRun(runId: string): Promise<{ runId: string; message: ChatMessage }> {
+    const run = this.options.runs.getRun(runId);
+    if (!run) {
+      throw new Error(`Run not found: ${runId}`);
+    }
+    if (run.status !== "waiting_for_approval" && run.status !== "interrupted" && run.status !== "running") {
+      throw new Error(`Run ${runId} cannot be resumed from status ${run.status}`);
+    }
+
+    const resumed = this.resumeMessages(runId);
+    if (resumed.pendingApprovals.length > 0) {
+      throw new Error(`Run ${runId} still has pending approvals: ${resumed.pendingApprovals.join(", ")}`);
+    }
+    for (const message of resumed.messagesToPersist) {
+      this.options.runs.appendMessage({
+        runId,
+        role: "tool",
+        content: message.content ?? null,
+        toolCallId: message.tool_call_id,
+        metadata: messageMetadata(message),
+      });
+    }
+
+    this.options.runs.updateRunStatus(runId, "running");
+    this.writeSnapshot(runId, "resumed", 0, resumed.messages);
+    return this.continueRun(runId, resumed.messages);
+  }
+
+  private resumeMessages(runId: string): {
+    messages: ChatMessage[];
+    messagesToPersist: ChatMessage[];
+    pendingApprovals: string[];
+  } {
+    const rows = this.options.runs.listMessages(runId);
+    const storedFinalToolMessages = new Set(
+      rows
+        .filter((row) => row.role === "tool" && row.toolCallId && !isApprovalPlaceholderContent(row.content))
+        .map((row) => row.toolCallId as string),
+    );
+    const messages: ChatMessage[] = [this.systemMessage()];
+    const messagesToPersist: ChatMessage[] = [];
+    const pendingApprovals: string[] = [];
+
+    for (const row of rows) {
+      const message = messageRowToChatMessage(row);
+      const approval = parseApprovalPlaceholder(message.content);
+      if (!approval) {
+        messages.push(message);
+        continue;
+      }
+
+      if (message.tool_call_id && storedFinalToolMessages.has(message.tool_call_id)) {
+        continue;
+      }
+
+      const toolCall = this.options.queue.getToolCall(approval.toolCallId);
+      if (!toolCall || !isTerminalToolCallStatus(toolCall.status)) {
+        pendingApprovals.push(approval.approvalId ?? approval.toolCallId);
+        continue;
+      }
+
+      const resultMessage: ChatMessage = {
+        role: "tool",
+        tool_call_id: message.tool_call_id,
+        name: message.name,
+        content: JSON.stringify(toolCallRowResultContent(toolCall)),
+      };
+      messages.push(resultMessage);
+      messagesToPersist.push(resultMessage);
+    }
+
+    return { messages, messagesToPersist, pendingApprovals };
+  }
+
+  private async continueRun(runId: string, messages: ChatMessage[]): Promise<{ runId: string; message: ChatMessage }> {
     let lastModelStepId = "model";
     let runningModelStepId: string | null = null;
 
     try {
-      this.options.runs.updateRunStatus(run.id, "running");
-      const messages: ChatMessage[] = [
-        this.systemMessage(),
-        ...priorConversation(options.history ?? []),
-        { role: "user", content },
-      ];
-      this.options.runs.appendMessage({ runId: run.id, role: "user", content });
-      this.writeSnapshot(run.id, "user_message", 0, messages);
-
       for (let round = 0; round <= this.options.config.maxToolRounds; round += 1) {
         messages[0] = this.systemMessage();
         const modelStep = this.options.runs.createStep({
-          runId: run.id,
+          runId,
           kind: "model",
           status: "running",
           title: `Model round ${round + 1}`,
@@ -77,20 +154,20 @@ export class HarnessRunner {
 
         messages.push(message);
         this.options.runs.appendMessage({
-          runId: run.id,
+          runId,
           role: "assistant",
           content: message.content ?? null,
           metadata: messageMetadata(message),
         });
         this.options.runs.updateStepStatus(modelStep.id, "succeeded");
         runningModelStepId = null;
-        this.writeSnapshot(run.id, "model_message", round, messages);
+        this.writeSnapshot(runId, "model_message", round, messages);
 
         const toolCalls = message.tool_calls ?? [];
         if (toolCalls.length === 0) {
-          this.options.runs.updateRunStatus(run.id, "succeeded");
-          this.writeSnapshot(run.id, "succeeded", round, messages);
-          return { runId: run.id, message };
+          this.options.runs.updateRunStatus(runId, "succeeded");
+          this.writeSnapshot(runId, "succeeded", round, messages);
+          return { runId, message };
         }
         if (round >= this.options.config.maxToolRounds) {
           throw new Error(`Tool loop exceeded maxToolRounds=${this.options.config.maxToolRounds}`);
@@ -98,26 +175,26 @@ export class HarnessRunner {
 
         let waitingForApproval = false;
         for (const call of toolCalls) {
-          const toolResult = await this.runToolCall(run.id, call);
+          const toolResult = await this.runToolCall(runId, call);
           const toolMessage = toolResult.message;
           messages.push(toolMessage);
           this.options.runs.appendMessage({
-            runId: run.id,
+            runId,
             role: "tool",
             content: toolMessage.content ?? null,
             toolCallId: toolMessage.tool_call_id,
             metadata: messageMetadata(toolMessage),
           });
-          this.writeSnapshot(run.id, "tool_result", round, messages);
+          this.writeSnapshot(runId, "tool_result", round, messages);
           if (toolResult.status === "approval_required") {
             waitingForApproval = true;
           }
         }
 
         if (waitingForApproval) {
-          this.options.runs.updateRunStatus(run.id, "waiting_for_approval");
-          this.writeSnapshot(run.id, "waiting_for_approval", round, messages);
-          return { runId: run.id, message };
+          this.options.runs.updateRunStatus(runId, "waiting_for_approval");
+          this.writeSnapshot(runId, "waiting_for_approval", round, messages);
+          return { runId, message };
         }
       }
 
@@ -127,17 +204,17 @@ export class HarnessRunner {
       if (runningModelStepId) {
         this.updateStepStatus(runningModelStepId, "failed");
       }
-      this.options.events.append("model.error", { runId: run.id, error: message }, run.id);
+      this.options.events.append("model.error", { runId, error: message }, runId);
       this.options.evidence.createEvidence({
-        runId: run.id,
+        runId,
         sourceType: "model_error",
         sourceId: lastModelStepId,
         title: "Model error",
         summary: message,
         content: (error as Error).stack ?? message,
       });
-      this.options.runs.updateRunStatus(run.id, "failed");
-      this.options.runs.writeSnapshot(run.id, {
+      this.options.runs.updateRunStatus(runId, "failed");
+      this.options.runs.writeSnapshot(runId, {
         phase: "failed",
         error: message,
       });
@@ -277,6 +354,79 @@ function stepStatusForToolResult(status: ToolQueueResult["status"]): StepStatus 
     return "interrupted";
   }
   return "failed";
+}
+
+function messageRowToChatMessage(row: MessageRow): ChatMessage {
+  const metadata = row.metadata ?? {};
+  const message: ChatMessage = {
+    role: row.role,
+    content: row.content,
+  };
+  if (row.role === "tool") {
+    if (typeof metadata.name === "string") {
+      message.name = metadata.name;
+    }
+    if (typeof metadata.tool_call_id === "string") {
+      message.tool_call_id = metadata.tool_call_id;
+    } else if (row.toolCallId) {
+      message.tool_call_id = row.toolCallId;
+    }
+  }
+  if (row.role === "assistant" && Array.isArray(metadata.tool_calls)) {
+    message.tool_calls = metadata.tool_calls as unknown as ToolCall[];
+  }
+  return message;
+}
+
+function isApprovalPlaceholderContent(content: string | null): boolean {
+  return Boolean(parseApprovalPlaceholder(content));
+}
+
+function parseApprovalPlaceholder(
+  content: string | null | undefined,
+): { toolCallId: string; approvalId?: string } | undefined {
+  if (!content) {
+    return undefined;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(parsed) || parsed.status !== "approval_required" || typeof parsed.toolCallId !== "string") {
+    return undefined;
+  }
+  return {
+    toolCallId: parsed.toolCallId,
+    ...(typeof parsed.approvalId === "string" ? { approvalId: parsed.approvalId } : {}),
+  };
+}
+
+function isTerminalToolCallStatus(status: ToolCallRow["status"]): boolean {
+  return status === "succeeded" || status === "failed" || status === "denied" || status === "canceled" || status === "interrupted";
+}
+
+function toolCallRowResultContent(toolCall: ToolCallRow): Record<string, unknown> {
+  if (toolCall.status === "succeeded") {
+    const result = isRecord(toolCall.result) ? toolCall.result : undefined;
+    return {
+      status: "succeeded",
+      toolCallId: toolCall.id,
+      ...(result && "output" in result ? { output: result.output } : {}),
+      ...(toolCall.result !== null ? { result: toolCall.result } : {}),
+    };
+  }
+  return {
+    status: toolCall.status,
+    toolCallId: toolCall.id,
+    error: toolCall.error ?? `Tool ${toolCall.toolName} ${toolCall.status}`,
+    ...(toolCall.result !== null ? { result: toolCall.result } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function snapshotMessage(message: ChatMessage): Record<string, unknown> {
