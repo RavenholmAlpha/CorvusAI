@@ -1,6 +1,6 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
-import type { CommandRegistry } from "./commands.js";
+import type { CommandRegistry, DurableHarnessAdapter } from "./commands.js";
 import type { CorvusConfig } from "./config.js";
 import type { CorvusAgent } from "./agent.js";
 import { assistantLabel, cassetteHeader, errorLine, promptLabel, systemLine } from "./theme.js";
@@ -13,6 +13,7 @@ export interface CorvusTuiOptions {
   agent: CorvusAgent;
   commands: CommandRegistry;
   tools?: ToolRegistry;
+  harness?: DurableHarnessAdapter;
   input?: Readable;
   output?: Writable;
   saveConfig?: () => Promise<void>;
@@ -52,6 +53,7 @@ export class CorvusTui {
         const result = await this.options.commands.execute(trimmed, {
           config: this.options.config,
           tools: this.options.tools,
+          harness: this.options.harness,
           write: (message) => this.write(`${message}\n`),
           saveConfig: this.options.saveConfig,
           plugins: this.options.plugins,

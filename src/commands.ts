@@ -1,6 +1,17 @@
 import { createDefaultConfig, type CorvusConfig } from "./config.js";
+import type {
+  ApprovalRow,
+  ApprovalStatus,
+  DecisionScope,
+  EvidenceRow,
+  MessageRow,
+  RunRow,
+  SnapshotRow,
+} from "./harness/types.js";
 import { formatPermissionRules, setPermissionRule, type PermissionDecision } from "./permissions.js";
+import type { ToolQueueResult } from "./harness/tool-queue.js";
 import type { ToolRegistry } from "./tools/index.js";
+import type { ToolManifest } from "./tools/protocol.js";
 
 export interface ParsedSlashCommand {
   name: string;
@@ -11,8 +22,23 @@ export interface CommandContext {
   config: CorvusConfig;
   tools?: ToolRegistry;
   plugins?: Array<{ name: string; version: string; status: string }>;
+  harness?: DurableHarnessAdapter;
   write: (line: string) => void;
   saveConfig?: () => Promise<void>;
+}
+
+export interface DurableHarnessAdapter {
+  listRuns: () => RunRow[];
+  getRun: (id: string) => RunRow | undefined;
+  listMessages: (runId: string) => MessageRow[];
+  latestSnapshot: (runId: string) => SnapshotRow | undefined;
+  cancelRun: (id: string) => RunRow | undefined;
+  resumeRun?: (id: string) => Promise<RunRow | undefined> | RunRow | undefined;
+  listPendingApprovals: (runId?: string) => ApprovalRow[];
+  resolveApproval: (id: string, status: ApprovalStatus, scope: DecisionScope) => ApprovalRow;
+  runApproved: (toolCallId: string, tool: ToolManifest) => Promise<ToolQueueResult>;
+  getEvidence: (id: string) => EvidenceRow | undefined;
+  listEvidence: (runId: string) => EvidenceRow[];
 }
 
 export interface CommandResult {
@@ -26,7 +52,7 @@ export interface CommandDefinition {
   name: string;
   summary: string;
   usage: string;
-  category?: "main" | "configuration" | "agent" | "diagnostics" | "session";
+  category?: "main" | "configuration" | "agent" | "harness" | "diagnostics" | "session";
   execute: (args: string[], context: CommandContext) => Promise<CommandResult> | CommandResult;
 }
 
@@ -171,6 +197,158 @@ export function createCoreCommands(): CommandDefinition[] {
         ok: true,
         message: formatStatusPanel(context),
       }),
+    },
+    {
+      name: "runs",
+      summary: "List durable runs",
+      usage: "/runs",
+      category: "harness",
+      execute: (_args, context) => {
+        const runs = context.harness?.listRuns() ?? [];
+        if (runs.length === 0) {
+          return { ok: true, message: "No durable runs available." };
+        }
+        return { ok: true, message: formatRuns(runs) };
+      },
+    },
+    {
+      name: "run",
+      summary: "Show a durable run",
+      usage: "/run <id>",
+      category: "harness",
+      execute: (args, context) => {
+        const id = args[0];
+        if (!id) {
+          return { ok: false, message: "Usage: /run <id>" };
+        }
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        const run = context.harness.getRun(id);
+        if (!run) {
+          return { ok: false, message: `Run not found: ${id}` };
+        }
+        return {
+          ok: true,
+          message: formatRunDetails(
+            run,
+            context.harness.listMessages(run.id),
+            context.harness.latestSnapshot(run.id),
+          ),
+        };
+      },
+    },
+    {
+      name: "resume",
+      summary: "Resume a durable run",
+      usage: "/resume <id>",
+      category: "harness",
+      execute: async (args, context) => {
+        const id = args[0];
+        if (!id) {
+          return { ok: false, message: "Usage: /resume <id>" };
+        }
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        if (!context.harness.resumeRun) {
+          return { ok: false, message: "Durable run resume is not implemented." };
+        }
+        const run = context.harness.getRun(id);
+        if (!run) {
+          return { ok: false, message: `Run not found: ${id}` };
+        }
+        const resumed = await context.harness.resumeRun(id);
+        if (!resumed) {
+          return { ok: false, message: `Run not found: ${id}` };
+        }
+        return { ok: true, message: `Run ${resumed.id} resumed with status ${resumed.status}.` };
+      },
+    },
+    {
+      name: "cancel",
+      summary: "Cancel a durable run",
+      usage: "/cancel <id>",
+      category: "harness",
+      execute: (args, context) => {
+        const id = args[0];
+        if (!id) {
+          return { ok: false, message: "Usage: /cancel <id>" };
+        }
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        const canceled = context.harness.cancelRun(id);
+        if (!canceled) {
+          return { ok: false, message: `Run not found: ${id}` };
+        }
+        return { ok: true, message: `Run ${canceled.id} canceled.` };
+      },
+    },
+    {
+      name: "approvals",
+      summary: "List pending durable approvals",
+      usage: "/approvals",
+      category: "harness",
+      execute: (_args, context) => {
+        const approvals = context.harness?.listPendingApprovals() ?? [];
+        if (approvals.length === 0) {
+          return { ok: true, message: "No pending approvals." };
+        }
+        return { ok: true, message: formatApprovals(approvals) };
+      },
+    },
+    {
+      name: "approve",
+      summary: "Approve pending durable approval(s)",
+      usage: "/approve <id|all>",
+      category: "harness",
+      execute: async (args, context) => {
+        const target = args[0];
+        if (!target) {
+          return { ok: false, message: "Usage: /approve <id|all>" };
+        }
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        return resolveApprovals(target, "approved", context);
+      },
+    },
+    {
+      name: "deny",
+      summary: "Deny pending durable approval(s)",
+      usage: "/deny <id|all>",
+      category: "harness",
+      execute: async (args, context) => {
+        const target = args[0];
+        if (!target) {
+          return { ok: false, message: "Usage: /deny <id|all>" };
+        }
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        return resolveApprovals(target, "denied", context);
+      },
+    },
+    {
+      name: "evidence",
+      summary: "Show durable evidence",
+      usage: "/evidence [id|last]",
+      category: "harness",
+      execute: (args, context) => {
+        if (!context.harness) {
+          return { ok: true, message: "No evidence available." };
+        }
+        const target = args[0] ?? "last";
+        const evidence = target === "last" ? findLastEvidence(context.harness) : context.harness.getEvidence(target);
+        if (!evidence) {
+          return {
+            ok: false,
+            message: target === "last" ? "No evidence available." : `Evidence not found: ${target}`,
+          };
+        }
+        return { ok: true, message: formatEvidence(evidence) };
+      },
     },
     {
       name: "goal",
@@ -335,6 +513,7 @@ function formatCommandHelp(commands: CommandDefinition[]): string {
     ["main", "Main Deck"],
     ["configuration", "Configuration"],
     ["agent", "Agent"],
+    ["harness", "Durable Harness"],
     ["diagnostics", "Diagnostics"],
     ["session", "Session"],
   ];
@@ -354,10 +533,13 @@ function formatCommandHelp(commands: CommandDefinition[]): string {
 function formatMainMenu(context: CommandContext): string {
   const toolCount = context.tools?.list().length ?? 0;
   const pluginCount = context.plugins?.filter((plugin) => plugin.status === "loaded").length ?? 0;
+  const runCount = context.harness?.listRuns().length ?? 0;
+  const approvalCount = context.harness?.listPendingApprovals().length ?? 0;
   return [
     "Corvus Control Deck",
     "-------------------",
     "Chat          Type any message",
+    `Durable      /runs (${runCount}) | /approvals (${approvalCount}) | /evidence last`,
     "Settings      /setting show | /setting model <name> | /setting endpoint <url>",
     "Permissions   /permission | /permission tool:shell deny",
     `Tools         /tools (${toolCount} registered)`,
@@ -373,6 +555,8 @@ function formatStatusPanel(context: CommandContext): string {
   const plugins = context.plugins ?? [];
   const loadedPlugins = plugins.filter((plugin) => plugin.status === "loaded").length;
   const apiKeyState = process.env[context.config.apiKeyEnv] ? "set" : "missing";
+  const durableRuns = context.harness?.listRuns().length ?? 0;
+  const durableApprovals = context.harness?.listPendingApprovals().length ?? 0;
   const permissions = Object.values(context.config.permissions.rules).reduce(
     (counts, decision) => {
       counts[decision] += 1;
@@ -392,8 +576,151 @@ function formatStatusPanel(context: CommandContext): string {
     `Review: ${context.config.review.enabled ? "on" : "off"}`,
     `Tools: ${tools.length} registered`,
     `Plugins: ${loadedPlugins} loaded`,
+    `Durable harness: ${context.harness ? "available" : "unavailable"}`,
+    `Durable runs: ${durableRuns}`,
+    `Pending approvals: ${durableApprovals}`,
     `Permissions: ${permissions.allow} allow / ${permissions.ask} ask / ${permissions.deny} deny`,
   ].join("\n");
+}
+
+function formatRuns(runs: RunRow[]): string {
+  return [
+    "Durable runs:",
+    ...runs.map((run) => `${run.id.padEnd(38)} ${run.status.padEnd(20)} ${run.goal}`),
+  ].join("\n");
+}
+
+function formatRunDetails(run: RunRow, messages: MessageRow[], snapshot?: SnapshotRow): string {
+  const lines = [
+    `Run ${run.id}`,
+    `Status: ${run.status}`,
+    `Goal: ${run.goal}`,
+    `Model: ${run.model}`,
+    `Endpoint: ${run.endpoint}`,
+    `Created: ${run.createdAt}`,
+    `Updated: ${run.updatedAt}`,
+    `Completed: ${run.completedAt ?? "not completed"}`,
+    "",
+    "Messages:",
+  ];
+
+  if (messages.length === 0) {
+    lines.push("  No messages.");
+  } else {
+    for (const message of messages) {
+      const label = message.toolCallId ? `${message.role}(${message.toolCallId})` : message.role;
+      lines.push(`  ${label}: ${preview(message.content ?? "")}`);
+    }
+  }
+
+  lines.push("", "Latest snapshot:");
+  if (!snapshot) {
+    lines.push("  No snapshot.");
+  } else {
+    lines.push(`  ${snapshot.id} ${snapshot.createdAt}`);
+    lines.push(`  ${preview(JSON.stringify(snapshot.snapshot))}`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatApprovals(approvals: ApprovalRow[]): string {
+  return [
+    "Pending approvals:",
+    ...approvals.map(
+      (approval) =>
+        `${approval.id.padEnd(38)} run=${approval.runId} tool=${approval.toolName ?? "unknown"} call=${approval.toolCallId}`,
+    ),
+  ].join("\n");
+}
+
+async function resolveApprovals(
+  target: string,
+  status: "approved" | "denied",
+  context: CommandContext,
+): Promise<CommandResult> {
+  const harness = context.harness;
+  if (!harness) {
+    return { ok: false, message: "Durable harness unavailable." };
+  }
+
+  const pending = harness.listPendingApprovals();
+  const approvals = target.toLowerCase() === "all" ? pending : pending.filter((approval) => approval.id === target);
+  if (approvals.length === 0) {
+    return {
+      ok: false,
+      message: target.toLowerCase() === "all" ? "No pending approvals." : `Approval not found: ${target}`,
+    };
+  }
+
+  const lines: string[] = [];
+  let ok = true;
+  for (const approval of approvals) {
+    try {
+      const resolved = harness.resolveApproval(approval.id, status, "once");
+      if (status === "approved") {
+        lines.push(`Approval ${resolved.id} approved.`);
+        const tool = findTool(context.tools, resolved.toolName);
+        if (!tool) {
+          lines.push(
+            `Tool call ${resolved.toolCallId} approved; tool manifest ${resolved.toolName ?? "unknown"} unavailable.`,
+          );
+          continue;
+        }
+        const executed = await harness.runApproved(resolved.toolCallId, tool);
+        lines.push(`Tool call ${executed.toolCallId} executed: ${executed.status}${formatEvidenceSuffix(executed)}.`);
+      } else {
+        lines.push(`Approval ${resolved.id} denied.`);
+      }
+    } catch (error) {
+      ok = false;
+      lines.push(`Approval ${approval.id} failed: ${(error as Error).message}`);
+    }
+  }
+
+  return { ok, message: lines.join("\n") };
+}
+
+function findTool(tools: ToolRegistry | undefined, name: string | null): ToolManifest | undefined {
+  if (!name) {
+    return undefined;
+  }
+  return tools?.list().find((tool) => tool.name === name);
+}
+
+function formatEvidenceSuffix(result: ToolQueueResult): string {
+  return "evidenceId" in result && result.evidenceId ? ` evidence=${result.evidenceId}` : "";
+}
+
+function findLastEvidence(harness: DurableHarnessAdapter): EvidenceRow | undefined {
+  const runs = harness.listRuns();
+  for (const run of [...runs].reverse()) {
+    const evidence = harness.listEvidence(run.id);
+    if (evidence.length > 0) {
+      return evidence[evidence.length - 1];
+    }
+  }
+  return undefined;
+}
+
+function formatEvidence(evidence: EvidenceRow): string {
+  return [
+    `Evidence ${evidence.id}`,
+    `Run: ${evidence.runId}`,
+    `Source: ${evidence.sourceType} ${evidence.sourceId}`,
+    `Title: ${evidence.title}`,
+    `Summary: ${evidence.summary}`,
+    "Content:",
+    preview(evidence.content, 2000),
+  ].join("\n");
+}
+
+function preview(value: string, maxLength = 500): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) {
+    return normalized;
+  }
+  return `${normalized.slice(0, maxLength - 3)}...`;
 }
 
 function formatSettingsPanel(config: CorvusConfig): string {
