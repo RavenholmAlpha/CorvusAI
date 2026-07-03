@@ -11,3 +11,5 @@ export * from "./harness/types.js";
 export * from "./harness/event-log.js";
 export * from "./harness/run-store.js";
 export * from "./harness/evidence-store.js";
+export * from "./harness/approval-service.js";
+export * from "./harness/tool-queue.js";

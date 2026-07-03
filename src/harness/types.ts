@@ -24,6 +24,17 @@ export type RunStatus =
 export type StepKind = "model" | "tool" | "approval" | "review" | "system";
 export type StepStatus = "created" | "running" | "succeeded" | "failed" | "canceled" | "interrupted";
 export type EvidenceSourceType = "tool_result" | "tool_error" | "permission_denial" | "model_error" | "system";
+export type ToolCallStatus =
+  | "pending"
+  | "approval_required"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "denied"
+  | "canceled"
+  | "interrupted";
+export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+export type DecisionScope = "once" | "always" | "never";
 
 export interface RunRow {
   id: string;
@@ -74,6 +85,33 @@ export interface EvidenceRow {
   summary: string;
   content: string;
   createdAt: string;
+}
+
+export interface ToolCallRow {
+  id: string;
+  runId: string;
+  stepId: string | null;
+  toolName: string;
+  capability: string;
+  status: ToolCallStatus;
+  arguments: JsonObject;
+  result: JsonValue | null;
+  error: string | null;
+  timeoutMs: number;
+  createdAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+export interface ApprovalRow {
+  id: string;
+  runId: string;
+  toolCallId: string;
+  toolName: string | null;
+  status: ApprovalStatus;
+  decisionScope: DecisionScope;
+  createdAt: string;
+  decidedAt: string | null;
 }
 
 export interface SnapshotRow {
