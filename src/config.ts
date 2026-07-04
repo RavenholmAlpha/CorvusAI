@@ -20,6 +20,7 @@ export interface CorvusConfig {
   permissions: PermissionPolicy;
   review: ReviewConfig;
   systemPrompt: string;
+  compactionThreshold: number;
 }
 
 export function createDefaultConfig(): CorvusConfig {
@@ -41,6 +42,7 @@ export function createDefaultConfig(): CorvusConfig {
     },
     systemPrompt:
       "You are Corvus, a permissioned AI agent harness. Use tools when useful, respect permission decisions, and keep responses concise and actionable.",
+    compactionThreshold: 20000,
   };
 }
 

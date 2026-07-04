@@ -57,7 +57,7 @@ describe("CorvusAgent", () => {
 
     const reply = await agent.send("say hi");
 
-    expect(reply.content).toBe("tool said hi");
+    expect(reply.message.content).toBe("tool said hi");
     expect(requests).toHaveLength(2);
     expect(requests[1]?.messages).toEqual(
       expect.arrayContaining([

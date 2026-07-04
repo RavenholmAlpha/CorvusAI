@@ -32,6 +32,7 @@ export interface HarnessRunnerOptions {
 
 export interface RunTurnOptions {
   history?: ChatMessage[];
+  onChunk?: (text: string) => void;
 }
 
 interface DurableToolResult {
@@ -56,7 +57,7 @@ export class HarnessRunner {
     ];
     this.options.runs.appendMessage({ runId: run.id, role: "user", content });
     this.writeSnapshot(run.id, "user_message", 0, messages);
-    return this.continueRun(run.id, messages);
+    return this.continueRun(run.id, messages, 0, options.onChunk);
   }
 
   async resumeRun(runId: string): Promise<{ runId: string; message: ChatMessage }> {
@@ -151,6 +152,7 @@ export class HarnessRunner {
     runId: string,
     messages: ChatMessage[],
     startRound = 0,
+    onChunk?: (text: string) => void,
   ): Promise<{ runId: string; message: ChatMessage }> {
     let lastModelStepId = "model";
     let runningModelStepId: string | null = null;
@@ -170,6 +172,7 @@ export class HarnessRunner {
           messages: messages.map((message) => cloneChatMessage(message)),
           tools: this.options.tools.toOpenAITools(),
           tool_choice: "auto",
+          onChunk,
         });
         const message = response.choices[0]?.message;
         if (!message) {
@@ -332,6 +335,13 @@ function toolResultMessage(call: ToolCall, result: ToolQueueResult): ChatMessage
 }
 
 function toolErrorMessage(call: ToolCall, error: string): ChatMessage {
+  // Inject localized correction instruction to help the LLM recover from bad parameters
+  let messageStr = error;
+  if (error.includes("JSON")) {
+    messageStr = `Invalid JSON arguments: ${error}. Please fix the syntax and try again.`;
+  } else if (error.includes("Unknown tool")) {
+    messageStr = `Tool '${call.function.name}' does not exist. Please use one of the available tools.`;
+  }
   return {
     role: "tool",
     tool_call_id: call.id,
@@ -339,7 +349,8 @@ function toolErrorMessage(call: ToolCall, error: string): ChatMessage {
     content: JSON.stringify({
       status: "failed",
       toolCallId: call.id,
-      error,
+      error: messageStr,
+      instruction: "Review the error and emit a corrected tool call.",
     }),
   };
 }

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Corvus AI - 智能代理平台</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .container {
+            max-width: 700px;
+            padding: 3rem;
+            background: rgba(255,255,255,0.06);
+            border-radius: 24px;
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255,255,255,0.1);
+            box-shadow: 0 25px 50px rgba(0,0,0,0.5);
+        }
+        h1 {
+            font-size: 2.8rem;
+            font-weight: 700;
+            margin-bottom: 0.25rem;
+            background: linear-gradient(90deg, #e0c3fc, #8ec5fc);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        .subtitle {
+            font-size: 1rem;
+            color: #a0a0c0;
+            margin-bottom: 1.8rem;
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            padding-bottom: 1.2rem;
+        }
+        p {
+            line-height: 1.8;
+            color: #d0d0e8;
+            margin-bottom: 1rem;
+        }
+        .tag {
+            display: inline-block;
+            background: rgba(138, 92, 246, 0.25);
+            padding: 4px 14px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: #b8a0ff;
+            margin: 0.3rem 0.2rem;
+        }
+        .tags { margin: 1.5rem 0; }
+        .status {
+            margin-top: 2rem;
+            padding: 1rem;
+            border-radius: 12px;
+            background: rgba(0, 200, 100, 0.1);
+            border: 1px solid rgba(0, 200, 100, 0.2);
+            text-align: center;
+            font-size: 0.9rem;
+            color: #80e0a0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Corvus AI</h1>
+        <div class="subtitle">Permissioned AI Agent Harness</div>
+
+        <p>
+            <strong>Corvus</strong> 是一个基于权限控制的 AI 代理平台，旨在为用户提供
+            安全、可控且高效的智能体交互体验。每个代理都运行在严格的权限沙箱中，
+            确保每一步操作都经过用户批准。
+        </p>
+
+        <div class="tags">
+            <span class="tag">🔒 权限控制</span>
+            <span class="tag">🧠 智能代理</span>
+            <span class="tag">⚡ 工具编排</span>
+            <span class="tag">🌐 Web 集成</span>
+            <span class="tag">📂 文件管理</span>
+            <span class="tag">🖥️ Shell 执行</span>
+        </div>
+
+        <p>
+            核心特性：通过声明式工具调用与用户交互，支持文件读写、命令执行、
+            Web 抓取、目录浏览等多种能力。所有敏感操作都需要用户明确授权，
+            将 AI 的能动性与人类监督完美结合。
+        </p>
+
+        <div class="status">
+            ✅ Corvus 服务器正在运行 · 端口 8999
+        </div>
+    </div>
+</body>
+</html>

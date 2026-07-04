@@ -17,6 +17,9 @@ type ReadFileInput = JsonObject & { path: string; maxBytes?: number };
 type WriteFileInput = JsonObject & { path: string; content: string };
 type ListDirInput = JsonObject & { path?: string };
 type ShellInput = JsonObject & { command: string; cwd?: string; timeoutMs?: number };
+type ReplaceFileInput = JsonObject & { path: string; targetContent: string; replacementContent: string };
+type PatchFileInput = JsonObject & { path: string; search: string; replace: string };
+type GrepSearchInput = JsonObject & { query: string; path?: string; caseInsensitive?: boolean };
 type WebFetchInput = JsonObject & { url: string; method?: string; body?: string };
 type EmptyInput = JsonObject;
 
@@ -131,13 +134,169 @@ export function createBuiltInToolManifests(): ToolManifest[] {
         const shell = process.platform === "win32" ? "powershell.exe" : "sh";
         const args =
           process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-lc", command];
-        const result = await execFileAsync(shell, args, {
-          cwd: cwd ?? context.cwd,
-          timeout: Number(timeoutMs ?? context.timeoutMs),
-          signal: context.signal,
-          maxBuffer: 1024 * 1024,
-        });
-        return { ok: true, output: { stdout: result.stdout, stderr: result.stderr } };
+        let stdout = "";
+        let stderr = "";
+        try {
+          const result = await execFileAsync(shell, args, {
+            cwd: cwd ?? context.cwd,
+            timeout: Number(timeoutMs ?? context.timeoutMs),
+            signal: context.signal,
+            maxBuffer: 1024 * 1024 * 5, // 5MB limit
+          });
+          stdout = result.stdout;
+          stderr = result.stderr;
+        } catch (e: any) {
+          stdout = e.stdout || "";
+          stderr = e.stderr || e.message;
+        }
+        
+        const limit = context.outputLimitBytes;
+        const truncatedStdout = truncateString(stdout, limit);
+        const truncatedStderr = truncateString(stderr, limit);
+        
+        return { 
+          ok: true, 
+          output: { 
+            stdout: truncatedStdout, 
+            stderr: truncatedStderr,
+          } 
+        };
+      },
+    }),
+    builtInTool<ReplaceFileInput>({
+      name: "replace_file_content",
+      namespace: "filesystem",
+      description: "Replace exact substring matches in a file.",
+      capability: "filesystem.write",
+      risk: "medium",
+      parameters: objectSchema(
+        {
+          path: stringSchema("File path to modify."),
+          targetContent: stringSchema("Exact string to replace (must match perfectly including whitespace)."),
+          replacementContent: stringSchema("New content to insert."),
+        },
+        ["path", "targetContent", "replacementContent"],
+      ),
+      timeoutMs: 10000,
+      outputLimitBytes: 4000,
+      evidencePolicy: "summary",
+      resources: ["filesystem.write"],
+      execute: async ({ path, targetContent, replacementContent }) => {
+        const resolved = resolve(path);
+        const content = await readFile(resolved, "utf8");
+        const occurrences = content.split(targetContent).length - 1;
+        
+        if (occurrences === 0) {
+          return { ok: false, error: "Target content not found in file. Ensure exact match including whitespace." };
+        }
+        
+        const newContent = content.replaceAll(targetContent, replacementContent);
+        await writeFile(resolved, newContent, "utf8");
+        return { ok: true, output: { path: resolved, occurrencesReplaced: occurrences } };
+      },
+    }),
+    builtInTool<PatchFileInput>({
+      name: "patch_file",
+      namespace: "filesystem",
+      description: "Fuzzy replace a block of text in a file. Ignores leading/trailing whitespace on each line during matching.",
+      capability: "filesystem.write",
+      risk: "medium",
+      parameters: objectSchema(
+        {
+          path: stringSchema("File path to modify."),
+          search: stringSchema("Text to search for (whitespace on edges of each line is ignored)."),
+          replace: stringSchema("Replacement text."),
+        },
+        ["path", "search", "replace"],
+      ),
+      timeoutMs: 10000,
+      outputLimitBytes: 4000,
+      evidencePolicy: "summary",
+      resources: ["filesystem.write"],
+      execute: async ({ path, search, replace }) => {
+        const resolved = resolve(path);
+        const content = await readFile(resolved, "utf8");
+        const fileLines = content.split(/\r?\n/);
+        const searchLines = search.split(/\r?\n/).map(l => l.trim());
+        const replaceLines = replace.split(/\r?\n/);
+
+        let matchIndex = -1;
+        let matchCount = 0;
+
+        for (let i = 0; i <= fileLines.length - searchLines.length; i++) {
+          let matches = true;
+          for (let j = 0; j < searchLines.length; j++) {
+            if (fileLines[i + j].trim() !== searchLines[j]) {
+              matches = false;
+              break;
+            }
+          }
+          if (matches) {
+            matchIndex = i;
+            matchCount++;
+          }
+        }
+
+        if (matchCount === 0) {
+          return { ok: false, error: "Search block not found in file." };
+        }
+        if (matchCount > 1) {
+          return { ok: false, error: `Search block found ${matchCount} times. Please make the search block more specific.` };
+        }
+
+        fileLines.splice(matchIndex, searchLines.length, ...replaceLines);
+        await writeFile(resolved, fileLines.join("\n"), "utf8");
+        return { ok: true, output: { path: resolved, linesReplaced: searchLines.length, newLines: replaceLines.length } };
+      },
+    }),
+    builtInTool<GrepSearchInput>({
+      name: "grep_search",
+      namespace: "filesystem",
+      description: "Search for a pattern in files within a directory.",
+      capability: "filesystem.read",
+      risk: "low",
+      parameters: objectSchema(
+        {
+          query: stringSchema("Regex or string pattern to search for."),
+          path: stringSchema("Directory to search. Defaults to current directory."),
+          caseInsensitive: { type: "boolean", description: "Ignore case." } as JsonSchema,
+        },
+        ["query"],
+      ),
+      timeoutMs: 30000,
+      outputLimitBytes: 20000,
+      evidencePolicy: "summary",
+      resources: ["filesystem.read"],
+      execute: async ({ query, path, caseInsensitive }, context) => {
+        const shell = process.platform === "win32" ? "powershell.exe" : "sh";
+        // Simple grep implementation using native tools depending on OS
+        let args: string[];
+        if (process.platform === "win32") {
+          const ignoreCaseFlag = caseInsensitive !== false ? "" : "-CaseSensitive ";
+          args = ["-NoProfile", "-Command", `Select-String ${ignoreCaseFlag}-Pattern "${query.replace(/"/g, '`"')}" -Path "${resolve(path ?? ".")}/*" -Recurse | Select-Object -First 50 | Format-Table LineNumber, Path, Line -HideTableHeaders`];
+        } else {
+          const ignoreCaseFlag = caseInsensitive !== false ? "-i" : "";
+          args = ["-c", `grep -rn ${ignoreCaseFlag} -m 50 "${query.replace(/"/g, '\\"')}" "${resolve(path ?? ".")}"`];
+        }
+        
+        let stdout = "";
+        try {
+          const result = await execFileAsync(shell, args, {
+            cwd: context.cwd,
+            timeout: Number(context.timeoutMs),
+            maxBuffer: 1024 * 1024 * 2,
+          });
+          stdout = result.stdout;
+        } catch (e: any) {
+          if (e.code === 1) {
+            // grep returns 1 if no lines were selected, which is fine
+            stdout = "";
+          } else {
+            stdout = e.stdout || e.message;
+          }
+        }
+        
+        return { ok: true, output: { matches: truncateString(stdout.trim() || "No matches found.", context.outputLimitBytes) } };
       },
     }),
     builtInTool<WebFetchInput>({
@@ -218,4 +377,16 @@ function stringSchema(description: string): JsonSchema {
 
 function numberSchema(description: string): JsonSchema {
   return { type: "number", description };
+}
+
+function truncateString(str: string, limit: number): string {
+  if (!str) return "";
+  if (str.length <= limit) return str;
+  const half = Math.floor(limit / 2) - 50;
+  if (half <= 0) return str.slice(0, limit);
+  return (
+    str.slice(0, half) +
+    `\n\n... [Truncated ${str.length - limit} bytes] ...\n\n` +
+    str.slice(-half)
+  );
 }

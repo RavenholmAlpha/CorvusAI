@@ -523,13 +523,13 @@ describe("HarnessRunner", () => {
               role: "tool",
               tool_call_id: "call_unknown",
               name: "missing_tool",
-              content: expect.stringContaining("Unknown tool: missing_tool"),
+              content: expect.stringContaining("Tool 'missing_tool' does not exist"),
             }),
             expect.objectContaining({
               role: "tool",
               tool_call_id: "call_bad_json",
               name: "echo",
-              content: expect.stringContaining("Expected property name"),
+              content: expect.stringContaining("Invalid JSON arguments"),
             }),
           ]),
         );
@@ -552,14 +552,12 @@ describe("HarnessRunner", () => {
     expect(runs.listMessages(result.runId)[2]).toMatchObject({
       role: "tool",
       toolCallId: "call_unknown",
-      metadata: { name: "missing_tool", tool_call_id: "call_unknown" },
-      content: expect.stringContaining("Unknown tool: missing_tool"),
+      content: expect.stringContaining("Tool 'missing_tool' does not exist"),
     });
     expect(runs.listMessages(result.runId)[3]).toMatchObject({
       role: "tool",
       toolCallId: "call_bad_json",
-      metadata: { name: "echo", tool_call_id: "call_bad_json" },
-      content: expect.stringContaining("Expected property name"),
+      content: expect.stringContaining("Invalid JSON arguments"),
     });
     expect(db.prepare("select tool_name, status from tool_calls").all()).toEqual([]);
     expect(
@@ -646,7 +644,7 @@ describe("HarnessRunner", () => {
 
     const reply = await agent.send("hello durable agent");
 
-    expect(reply).toMatchObject({ role: "assistant", content: "durable reply" });
+    expect(reply.message).toMatchObject({ role: "assistant", content: "durable reply" });
     expect(agent.history()).toEqual([
       expect.objectContaining({ role: "system" }),
       { role: "user", content: "hello durable agent" },

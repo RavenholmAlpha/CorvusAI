@@ -41,7 +41,10 @@ export async function main(): Promise<void> {
     const client = createConfigBackedChatModel(config);
     const runner = new HarnessRunner({ config, model: client, tools, runs, queue, evidence, events });
     const harness = createCliHarnessAdapter(runs, evidence, approvals, queue, runner);
-    const agent = new CorvusAgent({ config, tools, model: client, runner });
+    const agent = new CorvusAgent({ config, tools, model: client, runner, harness });
+
+    const needsSetup = !config.endpoint || !config.model || !config.apiKeyEnv || !process.env[config.apiKeyEnv];
+
     const tui = new CorvusTui({
       config,
       agent,
@@ -49,6 +52,7 @@ export async function main(): Promise<void> {
       tools,
       harness,
       plugins: loadedPlugins,
+      initialMode: needsSetup ? "setup" : "line",
       saveConfig: () => saveConfig(config),
     });
     tools.setPermissionRequester((prompt) => tui.askPermission(prompt));

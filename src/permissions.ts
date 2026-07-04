@@ -2,6 +2,7 @@ export type PermissionDecision = "allow" | "ask" | "deny";
 
 export interface PermissionPolicy {
   rules: Record<string, PermissionDecision>;
+  workspaceRules?: Record<string, Record<string, PermissionDecision>>;
 }
 
 export interface PermissionRequest {
@@ -26,7 +27,16 @@ export function createDefaultPolicy(): PermissionPolicy {
   };
 }
 
-export function decidePermission(policy: PermissionPolicy, request: PermissionRequest): PermissionDecision {
+export function decidePermission(policy: PermissionPolicy, request: PermissionRequest, cwd?: string): PermissionDecision {
+  const effectiveCwd = cwd || process.cwd();
+  if (policy.workspaceRules && policy.workspaceRules[effectiveCwd]) {
+    const wsRules = policy.workspaceRules[effectiveCwd];
+    const wsToolRule = wsRules[`tool:${request.toolName}`];
+    if (wsToolRule) return wsToolRule;
+    const wsCapRule = wsRules[`capability:${request.capability}`];
+    if (wsCapRule) return wsCapRule;
+  }
+
   const toolRule = policy.rules[`tool:${request.toolName}`];
   if (toolRule) {
     return toolRule;
@@ -40,7 +50,7 @@ export function decidePermission(policy: PermissionPolicy, request: PermissionRe
   return "ask";
 }
 
-export function setPermissionRule(policy: PermissionPolicy, target: string, decision: PermissionDecision): void {
+export function setPermissionRule(policy: PermissionPolicy, target: string, decision: PermissionDecision, cwd?: string): void {
   if (!validDecisions.has(decision)) {
     throw new Error(`Invalid permission decision: ${decision}`);
   }
@@ -49,7 +59,13 @@ export function setPermissionRule(policy: PermissionPolicy, target: string, deci
     throw new Error("Permission target must look like tool:shell or capability:network");
   }
 
-  policy.rules[target] = decision;
+  if (cwd) {
+    policy.workspaceRules = policy.workspaceRules || {};
+    policy.workspaceRules[cwd] = policy.workspaceRules[cwd] || {};
+    policy.workspaceRules[cwd][target] = decision;
+  } else {
+    policy.rules[target] = decision;
+  }
 }
 
 export function formatPermissionRules(policy: PermissionPolicy): string[] {
