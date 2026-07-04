@@ -947,9 +947,18 @@ function validateHttpUrl(value: string, label: string): void {
 }
 
 function validateEnvName(value: string): void {
+  if (looksLikeApiKeyValue(value)) {
+    throw new Error(
+      'api-key-env expects an environment variable name, not an API key value. PowerShell: $env:OPENAI_API_KEY="sk-..."',
+    );
+  }
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
     throw new Error("api-key-env must be a valid environment variable name");
   }
+}
+
+function looksLikeApiKeyValue(value: string): boolean {
+  return /^sk-[A-Za-z0-9_-]{8,}/.test(value);
 }
 
 function parseNumberSetting(value: string, label: string, min: number, max: number): number {

@@ -69,7 +69,11 @@ Tool calls run through the durable queue. Permission `ask` decisions pause the r
 
 `/setting` is the main configuration surface. It can customize OpenAI-compatible endpoints and models without restarting the TUI because Corvus reads the active config before each model request.
 
-Run `/setting wizard` in the TUI to enter an interactive step-by-step flow. Enter a new value at each prompt, press Enter to keep the current value, or type `/cancel` to leave without saving.
+Run `/setting wizard` in the TUI to enter an interactive step-by-step flow. Enter a new value at each prompt, press Enter to keep the current value, or type `/cancel` to leave without saving. The API key step asks for an environment variable name such as `OPENAI_API_KEY`, not the secret value. Set the actual key in PowerShell before starting Corvus:
+
+```powershell
+$env:OPENAI_API_KEY="sk-..."
+```
 
 ```text
 /setting wizard

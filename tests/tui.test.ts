@@ -110,6 +110,41 @@ describe("CorvusTui", () => {
     expect(config.goal).toBe("Ship Corvus");
     expect(output).toContain("Interactive Setting Wizard");
     expect(output).toContain("Model [gpt-4.1-mini]");
+    expect(output).toContain("API key env var name [OPENAI_API_KEY]");
     expect(output).toContain("Setting wizard complete.");
+  });
+
+  it("guides users away from pasting API key values into /setting wizard", async () => {
+    const config = createDefaultConfig();
+    let output = "";
+    let saves = 0;
+    const fakeKey = "sk-test-secret-value";
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk);
+        callback();
+      },
+    });
+    const tui = new CorvusTui({
+      config,
+      commands: new CommandRegistry(createCoreCommands()),
+      agent: {
+        send: async () => ({ role: "assistant", content: "unused" }),
+      } as never,
+      input: Readable.from(["/setting wizard\n", "\n", "\n", `${fakeKey}\n`, "DEEPSEEK_API_KEY\n", "/cancel\n", "/exit\n"]),
+      output: sink,
+      saveConfig: async () => {
+        saves += 1;
+      },
+    });
+
+    await tui.start();
+
+    expect(saves).toBe(0);
+    expect(config.apiKeyEnv).toBe("OPENAI_API_KEY");
+    expect(output).toContain("API key env var name [OPENAI_API_KEY]");
+    expect(output).toContain("api-key-env expects an environment variable name, not an API key value");
+    expect(output).toContain("PowerShell: $env:OPENAI_API_KEY=\"sk-...\"");
+    expect(output).not.toContain(fakeKey);
   });
 });
