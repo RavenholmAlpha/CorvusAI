@@ -31,7 +31,7 @@ export class OpenAIChatClient {
 
   async createChatCompletion(request: ChatCompletionRequest): Promise<ChatCompletionResponse> {
     if (!this.apiKey) {
-      throw new Error("Missing API key. Set the configured env var or use /model --api-key-env.");
+      throw new Error("Missing API key. Use /setting wizard, /setting api-key <key>, or configure api-key-env.");
     }
 
     const response = await this.fetchImpl(this.chatCompletionsUrl(), {

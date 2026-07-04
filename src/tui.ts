@@ -157,9 +157,9 @@ const settingsWizardSteps: SettingsWizardStep[] = [
     current: (config) => config.endpoint,
   },
   {
-    key: "api-key-env",
-    label: "API key env var name",
-    current: (config) => config.apiKeyEnv,
+    key: "api-key",
+    label: "API key",
+    current: (config) => (config.apiKey ? "configured" : "not set"),
   },
   {
     key: "temperature",
@@ -201,7 +201,7 @@ class SettingsWizardSession {
       "Interactive Setting Wizard",
       "--------------------------",
       "Enter a value for each setting. Press Enter to keep current. Type /cancel to stop without saving.",
-      "For API key env var name, enter OPENAI_API_KEY-style names only. Put the secret value in your shell environment.",
+      "The API key is stored in local .corvus/config.json and masked in TUI output.",
       "",
     ].join("\n");
   }

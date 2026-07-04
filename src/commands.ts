@@ -372,26 +372,28 @@ export function createCoreCommands(): CommandDefinition[] {
     },
     {
       name: "model",
-      summary: "Set model, endpoint, API key env, or temperature",
-      usage: "/model [name] [--endpoint url] [--api-key-env ENV] [--temperature n]",
+      summary: "Set model, endpoint, API key, API key env, or temperature",
+      usage: "/model [name] [--endpoint url] [--api-key KEY] [--api-key-env ENV] [--temperature n]",
       category: "configuration",
       execute: (args, context) => {
         const next = parseModelArgs(args);
         const changes: string[] = [];
         if (next.model) changes.push(applySetting(context.config, "model", [next.model]));
         if (next.endpoint) changes.push(applySetting(context.config, "endpoint", [next.endpoint]));
+        if (next.apiKey) changes.push(applySetting(context.config, "api-key", [next.apiKey]));
         if (next.apiKeyEnv) changes.push(applySetting(context.config, "api-key-env", [next.apiKeyEnv]));
         if (next.temperature !== undefined) changes.push(applySetting(context.config, "temperature", [String(next.temperature)]));
 
         const persist =
           next.model !== undefined ||
           next.endpoint !== undefined ||
+          next.apiKey !== undefined ||
           next.apiKeyEnv !== undefined ||
           next.temperature !== undefined;
         return {
           ok: true,
           persist,
-          message: `Model=${context.config.model} endpoint=${context.config.endpoint} apiKeyEnv=${context.config.apiKeyEnv} temperature=${context.config.temperature}`,
+          message: `Model=${context.config.model} endpoint=${context.config.endpoint} apiKey=${formatSecretValue(context.config.apiKey)} apiKeyEnv=${context.config.apiKeyEnv} temperature=${context.config.temperature}`,
         };
       },
     },
@@ -495,6 +497,7 @@ export function createCoreCommands(): CommandDefinition[] {
           {
             model: context.config.model,
             endpoint: context.config.endpoint,
+            apiKey: formatSecretValue(context.config.apiKey),
             apiKeyEnv: context.config.apiKeyEnv,
             goal: context.config.goal,
             pluginDir: context.config.pluginDir,
@@ -565,6 +568,7 @@ function formatStatusPanel(context: CommandContext): string {
   const plugins = context.plugins ?? [];
   const loadedPlugins = plugins.filter((plugin) => plugin.status === "loaded").length;
   const apiKeyState = process.env[context.config.apiKeyEnv] ? "set" : "missing";
+  const localApiKeyState = context.config.apiKey ? formatSecretValue(context.config.apiKey) : "not set";
   const durableRuns = context.harness?.listRuns().length ?? 0;
   const durableApprovals = context.harness?.listPendingApprovals().length ?? 0;
   const permissions = Object.values(context.config.permissions.rules).reduce(
@@ -579,7 +583,8 @@ function formatStatusPanel(context: CommandContext): string {
     "--------------",
     `Model: ${context.config.model}`,
     `Endpoint: ${context.config.endpoint}`,
-    `API key env: ${context.config.apiKeyEnv} (${apiKeyState})`,
+    `API key: ${localApiKeyState}`,
+    `API key env fallback: ${context.config.apiKeyEnv} (${apiKeyState})`,
     `Temperature: ${context.config.temperature}`,
     `Max tool rounds: ${context.config.maxToolRounds}`,
     `Goal: ${context.config.goal || "not set"}`,
@@ -781,6 +786,7 @@ function formatSettingsPanel(config: CorvusConfig): string {
     "---------------",
     `model             ${config.model}`,
     `endpoint          ${config.endpoint}`,
+    `api-key           ${formatSecretValue(config.apiKey)}`,
     `api-key-env       ${config.apiKeyEnv}`,
     `temperature       ${config.temperature}`,
     `max-tool-rounds   ${config.maxToolRounds}`,
@@ -791,6 +797,7 @@ function formatSettingsPanel(config: CorvusConfig): string {
     "Edit examples:",
     "  /setting model gpt-4.1-mini",
     "  /setting endpoint https://api.openai.com/v1",
+    "  /setting api-key sk-...",
     "  /setting api-key-env OPENAI_API_KEY",
     "  /setting temperature 0.2",
     "  /setting max-tool-rounds 6",
@@ -813,7 +820,10 @@ function formatSettingsWizard(config: CorvusConfig): string {
     `2. Endpoint     current=${config.endpoint}`,
     "   /setting endpoint https://api.openai.com/v1",
     "",
-    `3. API key env  current=${config.apiKeyEnv} (${apiKeyState})`,
+    `3. API key      current=${formatSecretValue(config.apiKey)}`,
+    "   /setting api-key sk-...",
+    "",
+    `Fallback env    current=${config.apiKeyEnv} (${apiKeyState})`,
     "   /setting api-key-env OPENAI_API_KEY",
     "",
     `4. Temperature  current=${config.temperature}`,
@@ -849,6 +859,9 @@ export function applySetting(config: CorvusConfig, rawKey: string, rawValue: str
       validateHttpUrl(value, "endpoint");
       config.endpoint = value.replace(/\/+$/, "");
       return `endpoint=${config.endpoint}`;
+    case "apiKey":
+      config.apiKey = parseApiKeyValue(value);
+      return `apiKey=${formatSecretValue(config.apiKey)}`;
     case "apiKeyEnv":
       validateEnvName(value);
       config.apiKeyEnv = value;
@@ -887,6 +900,7 @@ export function applySetting(config: CorvusConfig, rawKey: string, rawValue: str
 function normalizeSettingKey(key: string):
   | "model"
   | "endpoint"
+  | "apiKey"
   | "apiKeyEnv"
   | "temperature"
   | "maxToolRounds"
@@ -903,9 +917,12 @@ function normalizeSettingKey(key: string):
     case "base-url":
     case "baseurl":
       return "endpoint";
+    case "api-key":
+    case "apikey":
+    case "key":
+      return "apiKey";
     case "api-key-env":
     case "apikeyenv":
-    case "api-key":
       return "apiKeyEnv";
     case "temperature":
     case "temp":
@@ -946,10 +963,27 @@ function validateHttpUrl(value: string, label: string): void {
   }
 }
 
+function parseApiKeyValue(value: string): string {
+  if (["clear", "none", "unset"].includes(value.toLowerCase())) {
+    return "";
+  }
+  return value;
+}
+
+function formatSecretValue(value: string): string {
+  if (!value) {
+    return "not set";
+  }
+  if (value.length <= 8) {
+    return "set";
+  }
+  return `${value.slice(0, 3)}...${value.slice(-4)}`;
+}
+
 function validateEnvName(value: string): void {
   if (looksLikeApiKeyValue(value)) {
     throw new Error(
-      'api-key-env expects an environment variable name, not an API key value. PowerShell: $env:OPENAI_API_KEY="sk-..."',
+      "api-key-env expects an environment variable name. Use /setting api-key <key> to store the key directly.",
     );
   }
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) {
@@ -987,12 +1021,14 @@ function parseOnOff(value: string, label: string): boolean {
 function parseModelArgs(args: string[]): {
   model?: string;
   endpoint?: string;
+  apiKey?: string;
   apiKeyEnv?: string;
   temperature?: number;
 } {
   const result: {
     model?: string;
     endpoint?: string;
+    apiKey?: string;
     apiKeyEnv?: string;
     temperature?: number;
   } = {};
@@ -1003,6 +1039,9 @@ function parseModelArgs(args: string[]): {
 
     if (arg === "--endpoint" && next) {
       result.endpoint = next;
+      index += 1;
+    } else if (arg === "--api-key" && next) {
+      result.apiKey = next;
       index += 1;
     } else if (arg === "--api-key-env" && next) {
       result.apiKeyEnv = next;

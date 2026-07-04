@@ -7,11 +7,10 @@ Corvus is a Node.js AI agent harness with a cassette-futurist terminal UI, OpenA
 ```bash
 npm install
 npm run build
-$env:OPENAI_API_KEY="sk-..."
 npm run dev
 ```
 
-Use normal text to chat with the agent. Use slash commands to control runtime state.
+Use `/setting wizard` to configure the endpoint, model, and API key. Use normal text to chat with the agent. Use slash commands to control runtime state.
 
 ## Commands
 
@@ -20,7 +19,7 @@ Use normal text to chat with the agent. Use slash commands to control runtime st
 - `/status` shows model, endpoint, API-key, tool, plugin, review, and permission state.
 - `/goal [text]` sets or shows the active goal.
 - `/permission [tool:name|capability:name] [allow|ask|deny]` manages tool permissions.
-- `/model [name] [--endpoint url] [--api-key-env ENV] [--temperature n]` configures any OpenAI Chat Completions compatible endpoint.
+- `/model [name] [--endpoint url] [--api-key KEY] [--api-key-env ENV] [--temperature n]` configures any OpenAI Chat Completions compatible endpoint.
 - `/review [on|off|status]` toggles review instructions in the system prompt.
 - `/runs` lists durable runs.
 - `/run <id>` inspects a durable run, its messages, and latest snapshot.
@@ -69,16 +68,13 @@ Tool calls run through the durable queue. Permission `ask` decisions pause the r
 
 `/setting` is the main configuration surface. It can customize OpenAI-compatible endpoints and models without restarting the TUI because Corvus reads the active config before each model request.
 
-Run `/setting wizard` in the TUI to enter an interactive step-by-step flow. Enter a new value at each prompt, press Enter to keep the current value, or type `/cancel` to leave without saving. The API key step asks for an environment variable name such as `OPENAI_API_KEY`, not the secret value. Set the actual key in PowerShell before starting Corvus:
-
-```powershell
-$env:OPENAI_API_KEY="sk-..."
-```
+Run `/setting wizard` in the TUI to enter an interactive step-by-step flow. Enter a new value at each prompt, press Enter to keep the current value, or type `/cancel` to leave without saving. The API key step accepts the actual key and stores it in local `.corvus/config.json`, which is gitignored. TUI output masks stored keys.
 
 ```text
 /setting wizard
 /setting model gpt-4.1-mini
 /setting endpoint https://api.openai.com/v1
+/setting api-key sk-...
 /setting api-key-env OPENAI_API_KEY
 /setting temperature 0.2
 /setting max-tool-rounds 6

@@ -71,10 +71,10 @@ describe("slash commands", () => {
     expect(output).toContain("Corvus Setting Wizard");
     expect(output).toContain("1. Model");
     expect(output).toContain("2. Endpoint");
-    expect(output).toContain("API key env");
+    expect(output).toContain("API key");
     expect(output).toContain("/setting model");
     expect(output).toContain("/setting endpoint");
-    expect(output).toContain("/setting api-key-env");
+    expect(output).toContain("/setting api-key");
   });
 
   it("updates model endpoint and runtime settings through /setting", async () => {
@@ -91,6 +91,7 @@ describe("slash commands", () => {
 
     await registry.execute("/setting model corvus-large", context);
     await registry.execute("/setting endpoint https://gateway.example/openai/v1", context);
+    await registry.execute("/setting api-key sk-test-direct-key", context);
     await registry.execute("/setting api-key-env CORVUS_API_KEY", context);
     await registry.execute("/setting temperature 0.6", context);
     await registry.execute("/setting max-tool-rounds 9", context);
@@ -98,11 +99,30 @@ describe("slash commands", () => {
 
     expect(config.model).toBe("corvus-large");
     expect(config.endpoint).toBe("https://gateway.example/openai/v1");
+    expect(config.apiKey).toBe("sk-test-direct-key");
     expect(config.apiKeyEnv).toBe("CORVUS_API_KEY");
     expect(config.temperature).toBe(0.6);
     expect(config.maxToolRounds).toBe(9);
     expect(config.pluginDir).toBe("custom-plugins");
-    expect(saves).toBe(6);
+    expect(saves).toBe(7);
+  });
+
+  it("masks configured API keys in command output", async () => {
+    const config = createDefaultConfig();
+    const registry = new CommandRegistry(createCoreCommands());
+    let output = "";
+
+    const result = await registry.execute("/setting api-key sk-test-secret-value", {
+      config,
+      write: (line) => {
+        output += line;
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(config.apiKey).toBe("sk-test-secret-value");
+    expect(output).toContain("apiKey=sk-...alue");
+    expect(output).not.toContain("sk-test-secret-value");
   });
 
   it("rejects invalid settings values", async () => {

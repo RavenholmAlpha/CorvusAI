@@ -63,6 +63,7 @@ describe("CorvusTui", () => {
     let output = "";
     let saves = 0;
     let agentCalls = 0;
+    const fakeKey = "sk-test-direct-wizard-key";
     const sink = new Writable({
       write(chunk, _encoding, callback) {
         output += String(chunk);
@@ -82,7 +83,7 @@ describe("CorvusTui", () => {
         "/setting wizard\n",
         "corvus-large\n",
         "https://gateway.example/v1\n",
-        "CORVUS_API_KEY\n",
+        `${fakeKey}\n`,
         "0.4\n",
         "7\n",
         "custom-plugins\n",
@@ -102,7 +103,7 @@ describe("CorvusTui", () => {
     expect(saves).toBe(1);
     expect(config.model).toBe("corvus-large");
     expect(config.endpoint).toBe("https://gateway.example/v1");
-    expect(config.apiKeyEnv).toBe("CORVUS_API_KEY");
+    expect(config.apiKey).toBe(fakeKey);
     expect(config.temperature).toBe(0.4);
     expect(config.maxToolRounds).toBe(7);
     expect(config.pluginDir).toBe("custom-plugins");
@@ -110,11 +111,12 @@ describe("CorvusTui", () => {
     expect(config.goal).toBe("Ship Corvus");
     expect(output).toContain("Interactive Setting Wizard");
     expect(output).toContain("Model [gpt-4.1-mini]");
-    expect(output).toContain("API key env var name [OPENAI_API_KEY]");
+    expect(output).toContain("API key [not set]");
     expect(output).toContain("Setting wizard complete.");
+    expect(output).not.toContain(fakeKey);
   });
 
-  it("guides users away from pasting API key values into /setting wizard", async () => {
+  it("keeps a pasted API key local to config during /setting wizard", async () => {
     const config = createDefaultConfig();
     let output = "";
     let saves = 0;
@@ -131,7 +133,7 @@ describe("CorvusTui", () => {
       agent: {
         send: async () => ({ role: "assistant", content: "unused" }),
       } as never,
-      input: Readable.from(["/setting wizard\n", "\n", "\n", `${fakeKey}\n`, "DEEPSEEK_API_KEY\n", "/cancel\n", "/exit\n"]),
+      input: Readable.from(["/setting wizard\n", "\n", "\n", `${fakeKey}\n`, "\n", "\n", "\n", "\n", "\n", "/exit\n"]),
       output: sink,
       saveConfig: async () => {
         saves += 1;
@@ -140,11 +142,10 @@ describe("CorvusTui", () => {
 
     await tui.start();
 
-    expect(saves).toBe(0);
-    expect(config.apiKeyEnv).toBe("OPENAI_API_KEY");
-    expect(output).toContain("API key env var name [OPENAI_API_KEY]");
-    expect(output).toContain("api-key-env expects an environment variable name, not an API key value");
-    expect(output).toContain("PowerShell: $env:OPENAI_API_KEY=\"sk-...\"");
+    expect(saves).toBe(1);
+    expect(config.apiKey).toBe(fakeKey);
+    expect(output).toContain("API key [not set]");
+    expect(output).toContain("Setting wizard complete.");
     expect(output).not.toContain(fakeKey);
   });
 });

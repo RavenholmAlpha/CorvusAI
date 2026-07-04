@@ -38,4 +38,25 @@ describe("config backed chat model", () => {
       { url: "https://two.example/openai/v1/chat/completions", body: { model: "model-b" } },
     ]);
   });
+
+  it("prefers a configured API key over the API key env var", async () => {
+    process.env.CORVUS_TEST_API_KEY = "env-key";
+    const config = createDefaultConfig();
+    config.apiKeyEnv = "CORVUS_TEST_API_KEY";
+    config.apiKey = "stored-key";
+    const calls: Array<{ authorization?: string }> = [];
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      const headers = init?.headers as Record<string, string>;
+      calls.push({ authorization: headers.authorization });
+      return new Response(JSON.stringify({ choices: [{ message: { role: "assistant", content: "ok" } }] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    };
+
+    const model = createConfigBackedChatModel(config, fetchImpl);
+    await model.createChatCompletion({ messages: [], tools: [] });
+
+    expect(calls[0]?.authorization).toBe("Bearer stored-key");
+  });
 });

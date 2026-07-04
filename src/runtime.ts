@@ -7,7 +7,7 @@ export function createConfigBackedChatModel(config: CorvusConfig, fetchImpl?: ty
     createChatCompletion: (request) => {
       const client = new OpenAIChatClient({
         endpoint: config.endpoint,
-        apiKey: process.env[config.apiKeyEnv],
+        apiKey: config.apiKey || process.env[config.apiKeyEnv],
         model: config.model,
         temperature: config.temperature,
         fetch: fetchImpl,

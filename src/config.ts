@@ -11,6 +11,7 @@ export interface CorvusConfig {
   name: "Corvus";
   endpoint: string;
   model: string;
+  apiKey: string;
   apiKeyEnv: string;
   goal: string;
   pluginDir: string;
@@ -26,6 +27,7 @@ export function createDefaultConfig(): CorvusConfig {
     name: "Corvus",
     endpoint: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
+    apiKey: "",
     apiKeyEnv: "OPENAI_API_KEY",
     goal: "",
     pluginDir: "plugins",
