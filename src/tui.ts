@@ -1,9 +1,9 @@
 import { createInterface, type Interface } from "node:readline/promises";
 import type { Readable, Writable } from "node:stream";
-import type { CommandRegistry, DurableHarnessAdapter } from "./commands.js";
+import { applySetting, type CommandRegistry, type DurableHarnessAdapter } from "./commands.js";
 import type { CorvusConfig } from "./config.js";
 import type { CorvusAgent } from "./agent.js";
-import { assistantLabel, cassetteHeader, errorLine, promptLabel, systemLine } from "./theme.js";
+import { assistantLabel, cassetteHeader, colors, errorLine, promptLabel, systemLine } from "./theme.js";
 import { setPermissionRule } from "./permissions.js";
 import type { ToolPermissionPrompt } from "./tools/index.js";
 import type { ToolRegistry } from "./tools/index.js";
@@ -22,6 +22,7 @@ export interface CorvusTuiOptions {
 
 export class CorvusTui {
   private rl?: Interface;
+  private settingsWizard?: SettingsWizardSession;
   private readonly input: Readable;
   private readonly output: Writable;
 
@@ -42,10 +43,37 @@ export class CorvusTui {
     this.write(promptLabel());
     for await (const line of this.rl) {
       const trimmed = line.trim();
+      if (this.settingsWizard && trimmed === "/exit") {
+        this.settingsWizard = undefined;
+      }
+      if (this.settingsWizard) {
+        const result = this.settingsWizard.handle(line);
+        this.write(result.message);
+        if (result.status === "complete") {
+          Object.assign(this.options.config, result.config);
+          await this.options.saveConfig?.();
+          this.settingsWizard = undefined;
+          this.write(promptLabel());
+        } else if (result.status === "cancel") {
+          this.settingsWizard = undefined;
+          this.write(promptLabel());
+        } else {
+          this.write(this.settingsWizard.prompt());
+        }
+        continue;
+      }
+
       if (!trimmed) {
         if (running) {
           this.write(promptLabel());
         }
+        continue;
+      }
+
+      if (trimmed.toLowerCase() === "/setting wizard") {
+        this.settingsWizard = new SettingsWizardSession(this.options.config);
+        this.write(this.settingsWizard.startMessage());
+        this.write(this.settingsWizard.prompt());
         continue;
       }
 
@@ -109,4 +137,122 @@ export class CorvusTui {
   private write(message: string): void {
     this.output.write(message);
   }
+}
+
+type SettingsWizardStep = {
+  key: string;
+  label: string;
+  current: (config: CorvusConfig) => string;
+};
+
+const settingsWizardSteps: SettingsWizardStep[] = [
+  {
+    key: "model",
+    label: "Model",
+    current: (config) => config.model,
+  },
+  {
+    key: "endpoint",
+    label: "Endpoint",
+    current: (config) => config.endpoint,
+  },
+  {
+    key: "api-key-env",
+    label: "API key env",
+    current: (config) => config.apiKeyEnv,
+  },
+  {
+    key: "temperature",
+    label: "Temperature",
+    current: (config) => String(config.temperature),
+  },
+  {
+    key: "max-tool-rounds",
+    label: "Tool rounds",
+    current: (config) => String(config.maxToolRounds),
+  },
+  {
+    key: "plugin-dir",
+    label: "Plugin dir",
+    current: (config) => config.pluginDir,
+  },
+  {
+    key: "review",
+    label: "Review",
+    current: (config) => (config.review.enabled ? "on" : "off"),
+  },
+  {
+    key: "goal",
+    label: "Goal",
+    current: (config) => config.goal || "not set",
+  },
+];
+
+class SettingsWizardSession {
+  private readonly draft: CorvusConfig;
+  private index = 0;
+
+  constructor(config: CorvusConfig) {
+    this.draft = cloneConfig(config);
+  }
+
+  startMessage(): string {
+    return [
+      "Interactive Setting Wizard",
+      "--------------------------",
+      "Enter a value for each setting. Press Enter to keep current. Type /cancel to stop without saving.",
+      "",
+    ].join("\n");
+  }
+
+  prompt(): string {
+    const step = settingsWizardSteps[this.index];
+    return `${colors.orange}settings>${colors.reset} ${this.index + 1}/${settingsWizardSteps.length} ${step.label} [${step.current(
+      this.draft,
+    )}]: `;
+  }
+
+  handle(line: string): { status: "continue" | "complete" | "cancel"; message: string; config?: CorvusConfig } {
+    const answer = line.trim();
+    if (answer.toLowerCase() === "/cancel") {
+      return { status: "cancel", message: "\nSetting wizard canceled. No changes saved.\n" };
+    }
+    if (answer.startsWith("/")) {
+      return {
+        status: "continue",
+        message: `\n${errorLine("wizard is active; enter a value, press Enter, or type /cancel")}\n`,
+      };
+    }
+
+    const step = settingsWizardSteps[this.index];
+    if (answer.length > 0) {
+      try {
+        applySetting(this.draft, step.key, [answer]);
+      } catch (error) {
+        return { status: "continue", message: `\n${errorLine((error as Error).message)}\n` };
+      }
+    }
+
+    this.index += 1;
+    if (this.index >= settingsWizardSteps.length) {
+      return {
+        status: "complete",
+        message: "\nSetting wizard complete. Saved configuration.\n",
+        config: this.draft,
+      };
+    }
+
+    return { status: "continue", message: "\n" };
+  }
+}
+
+function cloneConfig(config: CorvusConfig): CorvusConfig {
+  return {
+    ...config,
+    permissions: {
+      ...config.permissions,
+      rules: { ...config.permissions.rules },
+    },
+    review: { ...config.review },
+  };
 }

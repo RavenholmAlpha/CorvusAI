@@ -57,4 +57,59 @@ describe("CorvusTui", () => {
     expect(output).toContain("read_file");
     expect(output).toContain("shell");
   });
+
+  it("runs /setting wizard as an interactive TUI flow", async () => {
+    const config = createDefaultConfig();
+    let output = "";
+    let saves = 0;
+    let agentCalls = 0;
+    const sink = new Writable({
+      write(chunk, _encoding, callback) {
+        output += String(chunk);
+        callback();
+      },
+    });
+    const tui = new CorvusTui({
+      config,
+      commands: new CommandRegistry(createCoreCommands()),
+      agent: {
+        send: async () => {
+          agentCalls += 1;
+          return { role: "assistant", content: "unused" };
+        },
+      } as never,
+      input: Readable.from([
+        "/setting wizard\n",
+        "corvus-large\n",
+        "https://gateway.example/v1\n",
+        "CORVUS_API_KEY\n",
+        "0.4\n",
+        "7\n",
+        "custom-plugins\n",
+        "off\n",
+        "Ship Corvus\n",
+        "/exit\n",
+      ]),
+      output: sink,
+      saveConfig: async () => {
+        saves += 1;
+      },
+    });
+
+    await tui.start();
+
+    expect(agentCalls).toBe(0);
+    expect(saves).toBe(1);
+    expect(config.model).toBe("corvus-large");
+    expect(config.endpoint).toBe("https://gateway.example/v1");
+    expect(config.apiKeyEnv).toBe("CORVUS_API_KEY");
+    expect(config.temperature).toBe(0.4);
+    expect(config.maxToolRounds).toBe(7);
+    expect(config.pluginDir).toBe("custom-plugins");
+    expect(config.review.enabled).toBe(false);
+    expect(config.goal).toBe("Ship Corvus");
+    expect(output).toContain("Interactive Setting Wizard");
+    expect(output).toContain("Model [gpt-4.1-mini]");
+    expect(output).toContain("Setting wizard complete.");
+  });
 });

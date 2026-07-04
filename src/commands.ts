@@ -833,7 +833,7 @@ function formatSettingsWizard(config: CorvusConfig): string {
   ].join("\n");
 }
 
-function applySetting(config: CorvusConfig, rawKey: string, rawValue: string[]): string {
+export function applySetting(config: CorvusConfig, rawKey: string, rawValue: string[]): string {
   const key = normalizeSettingKey(rawKey);
   const value = rawValue.join(" ").trim();
 
