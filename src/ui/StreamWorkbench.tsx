@@ -52,6 +52,7 @@ function MessageItem({ msg }: { msg: ChatMessage }) {
 export function StreamWorkbench({ state, agent }: { state: RuntimeState; agent: CorvusAgent }) {
   const [inputValue, setInputValue] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
+  const [partialMessage, setPartialMessage] = useState("");
   const [version, setVersion] = useState(0);
 
   const history = agent.history();
@@ -60,12 +61,16 @@ export function StreamWorkbench({ state, agent }: { state: RuntimeState; agent: 
     if (!query.trim() || isProcessing) return;
     setInputValue("");
     setIsProcessing(true);
+    setPartialMessage("");
     try {
-      await agent.send(query);
+      await agent.send(query, {
+        onChunk: (text) => setPartialMessage((prev) => prev + text),
+      });
     } catch (e) {
       // Ignore
     } finally {
       setIsProcessing(false);
+      setPartialMessage("");
       setVersion((v) => v + 1);
     }
   };
@@ -76,11 +81,16 @@ export function StreamWorkbench({ state, agent }: { state: RuntimeState; agent: 
         <Text bold underline>Conversation Stream</Text>
         <Box flexGrow={1} flexDirection="column" marginTop={1}>
           {history.map((msg, i) => <MessageItem key={i} msg={msg} />)}
+          {isProcessing && partialMessage && (
+            <Box paddingX={1} flexDirection="column">
+              <Text color="cyan">{"corvus> "} {partialMessage}</Text>
+            </Box>
+          )}
         </Box>
         <Box borderStyle="single" borderColor={isProcessing ? "gray" : "green"} paddingX={1}>
           <Text color={isProcessing ? "gray" : "green"}>▶ </Text>
           {isProcessing ? (
-            <Text dimColor>Processing...</Text>
+            <Text dimColor>Streaming response...</Text>
           ) : (
             <TextInput
               value={inputValue}

@@ -1,4 +1,5 @@
 import { createInterface, type Interface } from "node:readline/promises";
+import * as readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { applySetting, type CommandRegistry, type DurableHarnessAdapter } from "./commands.js";
 import type { CorvusConfig } from "./config.js";
@@ -7,6 +8,63 @@ import { assistantLabel, cassetteHeader, colors, errorLine, promptLabel, systemL
 import { setPermissionRule } from "./permissions.js";
 import type { ToolPermissionPrompt } from "./tools/index.js";
 import type { ToolRegistry } from "./tools/index.js";
+
+class StreamHighlighter {
+  private inCodeBlock = false;
+  private inInlineCode = false;
+  private backtickCount = 0;
+  private asterisks = 0;
+  private inBold = false;
+
+  process(chunk: string): string {
+    let out = "";
+    for (let i = 0; i < chunk.length; i++) {
+      const char = chunk[i];
+
+      if (char === '`') {
+        this.backtickCount++;
+        out += char;
+        if (this.backtickCount === 3) {
+          this.inCodeBlock = !this.inCodeBlock;
+          out += this.inCodeBlock ? `\x1b[40m\x1b[36m` : `\x1b[0m`;
+          this.backtickCount = 0;
+          this.inInlineCode = false;
+        }
+      } else {
+        if (this.backtickCount > 0 && this.backtickCount < 3) {
+          this.inInlineCode = !this.inInlineCode;
+          if (this.inInlineCode) {
+            out += `\x1b[33m`;
+          } else {
+            out += `\x1b[0m`;
+            if (this.inCodeBlock) out += `\x1b[40m\x1b[36m`;
+          }
+          this.backtickCount = 0;
+        }
+
+        if (char === '*' && !this.inCodeBlock && !this.inInlineCode) {
+           this.asterisks++;
+           out += char;
+           if (this.asterisks === 2) {
+              this.inBold = !this.inBold;
+              out += this.inBold ? `\x1b[1m\x1b[38;5;208m` : `\x1b[0m`;
+              this.asterisks = 0;
+           }
+        } else {
+           if (this.asterisks === 1) {
+              this.asterisks = 0;
+           }
+           if (char === '\n') {
+             this.backtickCount = 0;
+             this.asterisks = 0;
+           }
+           out += char;
+        }
+      }
+    }
+    return out;
+  }
+}
 
 export interface CorvusTuiOptions {
   config: CorvusConfig;
@@ -25,7 +83,6 @@ import { RuntimeStateManager } from "./runtime-state.js";
 
 export class CorvusTui {
   private rl?: Interface;
-  private settingsWizard?: SettingsWizardSession;
   private readonly input: Readable;
   private readonly output: Writable;
   private readonly stateManager: RuntimeStateManager;
@@ -116,25 +173,6 @@ export class CorvusTui {
 
     for await (const line of this.rl) {
       const trimmed = line.trim();
-      if (this.settingsWizard && trimmed === "/exit") {
-        this.settingsWizard = undefined;
-      }
-      if (this.settingsWizard) {
-        const result = this.settingsWizard.handle(line);
-        this.write(result.message);
-        if (result.status === "complete") {
-          Object.assign(this.options.config, result.config);
-          await this.options.saveConfig?.();
-          this.settingsWizard = undefined;
-          this.write(promptLabel());
-        } else if (result.status === "cancel") {
-          this.settingsWizard = undefined;
-          this.write(promptLabel());
-        } else {
-          this.write(this.settingsWizard.prompt());
-        }
-        continue;
-      }
 
       if (!trimmed) {
         if (this.running && this.stateManager.get().mode === "line") {
@@ -143,10 +181,9 @@ export class CorvusTui {
         continue;
       }
 
-      if (trimmed.toLowerCase() === "/setting wizard") {
-        this.settingsWizard = new SettingsWizardSession(this.options.config);
-        this.write(this.settingsWizard.startMessage());
-        this.write(this.settingsWizard.prompt());
+      if (trimmed.toLowerCase() === "/settings" || trimmed.toLowerCase() === "/setting") {
+        this.stateManager.setMode("dashboard");
+        this.stateManager.setDashboardSection("settings");
         continue;
       }
 
@@ -172,6 +209,7 @@ export class CorvusTui {
         this.needsLabel = true;
         const start = Date.now();
         let streamedChars = 0;
+        const highlighter = new StreamHighlighter();
 
         const result = await this.options.agent.send(trimmed, {
           onChunk: (text) => {
@@ -179,10 +217,13 @@ export class CorvusTui {
               this.write(`${assistantLabel()}: `);
               this.needsLabel = false;
             }
-            this.write(text);
+            this.write(highlighter.process(text));
             streamedChars += text.length;
           },
         });
+
+        // Ensure formatting resets at the end of output
+        this.write(`\x1b[0m`);
 
         if (streamedChars > 0 && !result.message.content?.endsWith("\n")) {
           this.write("\n");
@@ -227,7 +268,10 @@ export class CorvusTui {
       ),
     );
     this.write("\n");
-    const answer = (await this.rl.question("allow once / workspace / always / deny / never? ")).trim().toLowerCase();
+    const answer = await this.interactiveSelect(
+      `${colors.orange}Permission:${colors.reset}`,
+      ["allow once", "workspace", "always", "deny", "never"]
+    );
     if (answer === "always") {
       setPermissionRule(this.options.config.permissions, `tool:${prompt.tool.name}`, "allow");
       await this.options.saveConfig?.();
@@ -262,9 +306,10 @@ export class CorvusTui {
       this.write(systemLine(`  Tool: ${colors.bold}${toolName}${colors.reset}`));
       this.write("\n");
 
-      const answer = (await this.rl.question(`  ${colors.orange}approve>${colors.reset} allow once / workspace / always / deny / never? `))
-        .trim()
-        .toLowerCase();
+      const answer = await this.interactiveSelect(
+        `  ${colors.orange}approve>${colors.reset}`,
+        ["allow once", "workspace", "always", "deny", "never"]
+      );
 
       try {
         if (answer === "always") {
@@ -316,130 +361,63 @@ export class CorvusTui {
         }
       }
     } catch (error) {
-      this.write(`${errorLine((error as Error).message)}\n`);
+        this.write(`${errorLine((error as Error).message)}\n`);
+      }
     }
+
+  private async interactiveSelect(prompt: string, options: string[]): Promise<string> {
+    if (!process.stdin.isTTY) {
+      return (await this.rl!.question(`${prompt} ${options.join(" / ")}? `)).trim().toLowerCase();
+    }
+    
+    return new Promise((resolve) => {
+      this.rl?.pause();
+      
+      let selectedIndex = 0;
+      const render = () => {
+        readline.cursorTo(process.stdout, 0);
+        readline.clearLine(process.stdout, 0);
+        const parts = options.map((opt, i) =>
+          i === selectedIndex ? `\x1b[36m\x1b[4m> ${opt} <\x1b[0m` : `  ${opt}  `
+        );
+        process.stdout.write(`${prompt} ${parts.join("")}`);
+      };
+
+      const onKeypress = (str: string, key: readline.Key) => {
+        if (key.name === "left") {
+          selectedIndex = Math.max(0, selectedIndex - 1);
+          render();
+        } else if (key.name === "right") {
+          selectedIndex = Math.min(options.length - 1, selectedIndex + 1);
+          render();
+        } else if (key.name === "return" || key.name === "enter") {
+          cleanup();
+          process.stdout.write("\n");
+          resolve(options[selectedIndex].trim().toLowerCase());
+        } else if (key.name === "c" && key.ctrl) {
+          cleanup();
+          process.stdout.write("\n");
+          process.exit(0);
+        }
+      };
+
+      const cleanup = () => {
+        process.stdin.removeListener("keypress", onKeypress);
+        if (process.stdin.isRaw) {
+          process.stdin.setRawMode(false);
+        }
+        this.rl?.resume();
+      };
+
+      if (process.stdin.setRawMode) {
+        process.stdin.setRawMode(true);
+      }
+      process.stdin.on("keypress", onKeypress);
+      render();
+    });
   }
 
   private write(message: string): void {
     this.output.write(message);
   }
-}
-
-type SettingsWizardStep = {
-  key: string;
-  label: string;
-  current: (config: CorvusConfig) => string;
-};
-
-const settingsWizardSteps: SettingsWizardStep[] = [
-  {
-    key: "model",
-    label: "Model",
-    current: (config) => config.model,
-  },
-  {
-    key: "endpoint",
-    label: "Endpoint",
-    current: (config) => config.endpoint,
-  },
-  {
-    key: "api-key",
-    label: "API key",
-    current: (config) => (config.apiKey ? "configured" : "not set"),
-  },
-  {
-    key: "temperature",
-    label: "Temperature",
-    current: (config) => String(config.temperature),
-  },
-  {
-    key: "max-tool-rounds",
-    label: "Tool rounds",
-    current: (config) => String(config.maxToolRounds),
-  },
-  {
-    key: "plugin-dir",
-    label: "Plugin dir",
-    current: (config) => config.pluginDir,
-  },
-  {
-    key: "review",
-    label: "Review",
-    current: (config) => (config.review.enabled ? "on" : "off"),
-  },
-  {
-    key: "goal",
-    label: "Goal",
-    current: (config) => config.goal || "not set",
-  },
-];
-
-class SettingsWizardSession {
-  private readonly draft: CorvusConfig;
-  private index = 0;
-
-  constructor(config: CorvusConfig) {
-    this.draft = cloneConfig(config);
-  }
-
-  startMessage(): string {
-    return [
-      "Interactive Setting Wizard",
-      "--------------------------",
-      "Enter a value for each setting. Press Enter to keep current. Type /cancel to stop without saving.",
-      "The API key is stored in local .corvus/config.json and masked in TUI output.",
-      "",
-    ].join("\n");
-  }
-
-  prompt(): string {
-    const step = settingsWizardSteps[this.index];
-    return `${colors.orange}settings>${colors.reset} ${this.index + 1}/${settingsWizardSteps.length} ${step.label} [${step.current(
-      this.draft,
-    )}]: `;
-  }
-
-  handle(line: string): { status: "continue" | "complete" | "cancel"; message: string; config?: CorvusConfig } {
-    const answer = line.trim();
-    if (answer.toLowerCase() === "/cancel") {
-      return { status: "cancel", message: "\nSetting wizard canceled. No changes saved.\n" };
-    }
-    if (answer.startsWith("/")) {
-      return {
-        status: "continue",
-        message: `\n${errorLine("wizard is active; enter a value, press Enter, or type /cancel")}\n`,
-      };
-    }
-
-    const step = settingsWizardSteps[this.index];
-    if (answer.length > 0) {
-      try {
-        applySetting(this.draft, step.key, [answer]);
-      } catch (error) {
-        return { status: "continue", message: `\n${errorLine((error as Error).message)}\n` };
-      }
-    }
-
-    this.index += 1;
-    if (this.index >= settingsWizardSteps.length) {
-      return {
-        status: "complete",
-        message: "\nSetting wizard complete. Saved configuration.\n",
-        config: this.draft,
-      };
-    }
-
-    return { status: "continue", message: "\n" };
-  }
-}
-
-function cloneConfig(config: CorvusConfig): CorvusConfig {
-  return {
-    ...config,
-    permissions: {
-      ...config.permissions,
-      rules: { ...config.permissions.rules },
-    },
-    review: { ...config.review },
-  };
 }

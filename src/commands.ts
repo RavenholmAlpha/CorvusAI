@@ -409,9 +409,6 @@ export function createCoreCommands(): CommandDefinition[] {
         if (args.length === 0 || args[0]?.toLowerCase() === "show") {
           return { ok: true, message: formatSettingsPanel(context.config) };
         }
-        if (args[0]?.toLowerCase() === "wizard") {
-          return { ok: true, message: formatSettingsWizard(context.config) };
-        }
 
         const [rawKey, ...rawValue] = args[0]?.toLowerCase() === "set" ? args.slice(1) : args;
         if (!rawKey) {
@@ -691,16 +688,16 @@ function formatCommandHelp(commands: CommandDefinition[]): string {
     ["diagnostics", "Diagnostics"],
     ["session", "Session"],
   ];
-  const lines = ["Corvus commands:"];
+  const lines = ["\x1b[1m\x1b[36mCorvus commands:\x1b[0m"];
   for (const [category, label] of categories) {
     const group = commands.filter((command) => (command.category ?? "main") === category);
     if (group.length === 0) continue;
-    lines.push("", `${label}:`);
+    lines.push("", `\x1b[1m\x1b[34m${label}:\x1b[0m`);
     for (const command of group) {
-      lines.push(`  ${command.usage.padEnd(52)} ${command.summary}`);
+      lines.push(`  \x1b[32m${command.usage.padEnd(52)}\x1b[0m \x1b[90m${command.summary}\x1b[0m`);
     }
   }
-  lines.push("", "Type normal text to send a message to the agent. Use /menu for a task-oriented deck.");
+  lines.push("", "\x1b[90mType normal text to send a message to the agent. Use /menu for a task-oriented deck.\x1b[0m");
   return lines.join("\n");
 }
 
@@ -968,41 +965,7 @@ function formatSettingsPanel(config: CorvusConfig): string {
   ].join("\n");
 }
 
-function formatSettingsWizard(config: CorvusConfig): string {
-  const apiKeyState = process.env[config.apiKeyEnv] ? "set" : "missing";
-  return [
-    "Corvus Setting Wizard",
-    "---------------------",
-    "Run the matching command for each step you want to change.",
-    "",
-    `1. Model        current=${config.model}`,
-    "   /setting model gpt-4.1-mini",
-    "",
-    `2. Endpoint     current=${config.endpoint}`,
-    "   /setting endpoint https://api.openai.com/v1",
-    "",
-    `3. API key      current=${formatSecretValue(config.apiKey)}`,
-    "   /setting api-key sk-...",
-    "",
-    `Fallback env    current=${config.apiKeyEnv} (${apiKeyState})`,
-    "   /setting api-key-env OPENAI_API_KEY",
-    "",
-    `4. Temperature  current=${config.temperature}`,
-    "   /setting temperature 0.2",
-    "",
-    `5. Tool rounds  current=${config.maxToolRounds}`,
-    "   /setting max-tool-rounds 6",
-    "",
-    `6. Runtime      plugin-dir=${config.pluginDir} review=${config.review.enabled ? "on" : "off"}`,
-    "   /setting plugin-dir plugins",
-    "   /setting review on",
-    "",
-    `Goal           ${config.goal || "not set"}`,
-    "   /setting goal Build a safer agent",
-    "",
-    "After editing, run /status to verify the active runtime.",
-  ].join("\n");
-}
+
 
 export function applySetting(config: CorvusConfig, rawKey: string, rawValue: string[]): string {
   const key = normalizeSettingKey(rawKey);

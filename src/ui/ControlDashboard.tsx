@@ -24,11 +24,19 @@ function SetupPanel({ state }: { state: RuntimeState }) {
   );
 }
 
-function SettingsPanel() {
+function SettingsPanel({ config }: { config: any }) {
   return (
     <Box flexDirection="column">
-      <Text bold color="cyan">Settings</Text>
-      <Text dimColor>Configuration properties goes here...</Text>
+      <Text bold color="cyan">Settings (Read-only view)</Text>
+      <Box marginTop={1} flexDirection="column">
+        <Text>Model: {config?.model}</Text>
+        <Text>Endpoint: {config?.endpoint}</Text>
+        <Text>API Key Env: {config?.apiKeyEnv}</Text>
+        <Text>Max Tool Rounds: {config?.maxToolRounds}</Text>
+        <Box marginTop={1}>
+          <Text color="gray">To edit settings, modify .corvus/config.json directly.</Text>
+        </Box>
+      </Box>
     </Box>
   );
 }
@@ -69,7 +77,7 @@ function DiagnosticsPanel() {
   );
 }
 
-export function ControlDashboard({ state, manager }: { state: RuntimeState; manager: RuntimeStateManager }) {
+export function ControlDashboard({ state, manager, config }: { state: RuntimeState; manager: RuntimeStateManager; config?: any }) {
   const handleSelect = (item: { value: DashboardSection }) => {
     manager.setDashboardSection(item.value);
   };
@@ -92,7 +100,7 @@ export function ControlDashboard({ state, manager }: { state: RuntimeState; mana
 
       <Box width="50%" borderStyle="single" borderColor="gray" padding={1}>
         {state.dashboardSection === "setup" && <SetupPanel state={state} />}
-        {state.dashboardSection === "settings" && <SettingsPanel />}
+        {state.dashboardSection === "settings" && <SettingsPanel config={config} />}
         {state.dashboardSection === "permissions" && <PermissionsPanel />}
         {state.dashboardSection === "tools" && <ToolsPanel />}
         {state.dashboardSection === "plugins" && <PluginsPanel />}

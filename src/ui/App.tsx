@@ -75,7 +75,7 @@ export function App({ stateManager, agent, config }: AppProps) {
       {/* Main Content Area */}
       <Box flexGrow={1} flexDirection="row">
         {state.mode === "stream" && <StreamWorkbench state={state} agent={agent} />}
-        {state.mode === "dashboard" && <ControlDashboard state={state} manager={stateManager} />}
+        {state.mode === "dashboard" && <ControlDashboard state={state} manager={stateManager} config={config} />}
         {state.mode === "setup" && <SetupWizard state={state} manager={stateManager} config={config} />}
       </Box>
 
