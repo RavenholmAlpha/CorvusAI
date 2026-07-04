@@ -16,7 +16,7 @@ Use normal text to chat with the agent. Use slash commands to control runtime st
 ## Commands
 
 - `/menu` shows the task-oriented control deck.
-- `/setting [show|key value]` shows or edits runtime settings.
+- `/setting [show|wizard|key value]` shows, edits, or walks through runtime settings.
 - `/status` shows model, endpoint, API-key, tool, plugin, review, and permission state.
 - `/goal [text]` sets or shows the active goal.
 - `/permission [tool:name|capability:name] [allow|ask|deny]` manages tool permissions.
@@ -70,6 +70,7 @@ Tool calls run through the durable queue. Permission `ask` decisions pause the r
 `/setting` is the main configuration surface. It can customize OpenAI-compatible endpoints and models without restarting the TUI because Corvus reads the active config before each model request.
 
 ```text
+/setting wizard
 /setting model gpt-4.1-mini
 /setting endpoint https://api.openai.com/v1
 /setting api-key-env OPENAI_API_KEY

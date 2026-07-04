@@ -55,6 +55,28 @@ describe("slash commands", () => {
     expect(output).toContain("/setting model");
   });
 
+  it("shows a guided settings wizard through /setting wizard", async () => {
+    const config = createDefaultConfig();
+    const registry = new CommandRegistry(createCoreCommands());
+    let output = "";
+
+    const result = await registry.execute("/setting wizard", {
+      config,
+      write: (line) => {
+        output += line;
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(output).toContain("Corvus Setting Wizard");
+    expect(output).toContain("1. Model");
+    expect(output).toContain("2. Endpoint");
+    expect(output).toContain("API key env");
+    expect(output).toContain("/setting model");
+    expect(output).toContain("/setting endpoint");
+    expect(output).toContain("/setting api-key-env");
+  });
+
   it("updates model endpoint and runtime settings through /setting", async () => {
     const config = createDefaultConfig();
     const registry = new CommandRegistry(createCoreCommands());

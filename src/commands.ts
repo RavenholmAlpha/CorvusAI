@@ -397,17 +397,20 @@ export function createCoreCommands(): CommandDefinition[] {
     },
     {
       name: "setting",
-      summary: "Show or edit runtime settings",
-      usage: "/setting [show|key value]",
+      summary: "Show, edit, or walk through runtime settings",
+      usage: "/setting [show|wizard|key value]",
       category: "configuration",
       execute: (args, context) => {
         if (args.length === 0 || args[0]?.toLowerCase() === "show") {
           return { ok: true, message: formatSettingsPanel(context.config) };
         }
+        if (args[0]?.toLowerCase() === "wizard") {
+          return { ok: true, message: formatSettingsWizard(context.config) };
+        }
 
         const [rawKey, ...rawValue] = args[0]?.toLowerCase() === "set" ? args.slice(1) : args;
         if (!rawKey) {
-          return { ok: false, message: "Usage: /setting [show|key value]" };
+          return { ok: false, message: "Usage: /setting [show|wizard|key value]" };
         }
 
         const change = applySetting(context.config, rawKey, rawValue);
@@ -547,7 +550,7 @@ function formatMainMenu(context: CommandContext): string {
     "-------------------",
     "Chat          Type any message",
     `Durable      /runs (${runCount}) | /approvals (${approvalCount}) | /evidence last`,
-    "Settings      /setting show | /setting model <name> | /setting endpoint <url>",
+    "Settings      /setting wizard | /setting show | /setting model <name>",
     "Permissions   /permission | /permission tool:shell deny",
     `Tools         /tools (${toolCount} registered)`,
     `Plugins       /plugins (${pluginCount} loaded)`,
@@ -794,6 +797,39 @@ function formatSettingsPanel(config: CorvusConfig): string {
     "  /setting plugin-dir plugins",
     "  /setting review on",
     "  /setting goal Build a safer agent",
+  ].join("\n");
+}
+
+function formatSettingsWizard(config: CorvusConfig): string {
+  const apiKeyState = process.env[config.apiKeyEnv] ? "set" : "missing";
+  return [
+    "Corvus Setting Wizard",
+    "---------------------",
+    "Run the matching command for each step you want to change.",
+    "",
+    `1. Model        current=${config.model}`,
+    "   /setting model gpt-4.1-mini",
+    "",
+    `2. Endpoint     current=${config.endpoint}`,
+    "   /setting endpoint https://api.openai.com/v1",
+    "",
+    `3. API key env  current=${config.apiKeyEnv} (${apiKeyState})`,
+    "   /setting api-key-env OPENAI_API_KEY",
+    "",
+    `4. Temperature  current=${config.temperature}`,
+    "   /setting temperature 0.2",
+    "",
+    `5. Tool rounds  current=${config.maxToolRounds}`,
+    "   /setting max-tool-rounds 6",
+    "",
+    `6. Runtime      plugin-dir=${config.pluginDir} review=${config.review.enabled ? "on" : "off"}`,
+    "   /setting plugin-dir plugins",
+    "   /setting review on",
+    "",
+    `Goal           ${config.goal || "not set"}`,
+    "   /setting goal Build a safer agent",
+    "",
+    "After editing, run /status to verify the active runtime.",
   ].join("\n");
 }
 
