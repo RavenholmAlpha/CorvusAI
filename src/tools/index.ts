@@ -46,6 +46,8 @@ const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_OUTPUT_LIMIT_BYTES = 20000;
 const DEFAULT_CONCURRENCY: ToolConcurrency = { perTool: 1, perRun: 1, global: 1 };
 
+export type RegistryDisposer = () => boolean;
+
 export class ToolRegistry {
   private readonly tools = new Map<string, ToolManifest>();
   private permissionRequester?: PermissionRequester;
@@ -61,18 +63,21 @@ export class ToolRegistry {
     this.permissionRequester = requester;
   }
 
-  register(tool: RegisterableTool): void {
-    if (!/^[a-zA-Z0-9_-]+$/.test(tool.name)) {
-      throw new Error(`Invalid tool name: ${tool.name}`);
-    }
+  register(tool: RegisterableTool): RegistryDisposer {
+    if (!/^[a-zA-Z0-9_-]+$/.test(tool.name)) throw new Error(`Invalid tool name: ${tool.name}`);
     const manifest = toToolManifest(tool);
+    if (this.tools.has(manifest.name)) throw new Error(`Tool already registered: ${manifest.name}`);
     this.tools.set(manifest.name, manifest);
+    let disposed = false;
+    return () => { if (disposed) return false; disposed = true; if (this.tools.get(manifest.name) !== manifest) return false; return this.tools.delete(manifest.name); };
   }
 
-  registerMany(tools: RegisterableTool[]): void {
-    for (const tool of tools) {
-      this.register(tool);
-    }
+  registerMany(tools: RegisterableTool[]): RegistryDisposer {
+    const disposers: RegistryDisposer[] = [];
+    try { for (const tool of tools) disposers.push(this.register(tool)); }
+    catch (error) { for (const dispose of disposers.reverse()) dispose(); throw error; }
+    let disposed = false;
+    return () => { if (disposed) return false; disposed = true; let changed = false; for (const dispose of disposers.reverse()) changed = dispose() || changed; return changed; };
   }
 
   list(): ToolManifest[] {

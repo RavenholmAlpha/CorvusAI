@@ -1,3 +1,4 @@
+import type { CorvusAgent } from "./agent.js";
 import { createDefaultConfig, type CorvusConfig } from "./config.js";
 import type {
   ApprovalRow,
@@ -7,6 +8,7 @@ import type {
   MessageRow,
   RunRow,
   SnapshotRow,
+  SubagentTaskRow,
 } from "./harness/types.js";
 import { formatPermissionRules, setPermissionRule, type PermissionDecision } from "./permissions.js";
 import type { ToolQueueResult } from "./harness/tool-queue.js";
@@ -22,6 +24,7 @@ export interface ParsedSlashCommand {
 
 export interface CommandContext {
   config: CorvusConfig;
+  agent?: CorvusAgent;
   tools?: ToolRegistry;
   plugins?: Array<{ name: string; version: string; status: string }>;
   harness?: DurableHarnessAdapter;
@@ -42,6 +45,10 @@ export interface DurableHarnessAdapter {
   runApproved: (toolCallId: string, tool: ToolManifest) => Promise<ToolQueueResult>;
   getEvidence: (id: string) => EvidenceRow | undefined;
   listEvidence: (runId: string) => EvidenceRow[];
+  listSubagentTasks?: (parentSessionId?: string) => SubagentTaskRow[];
+  getSubagentTask?: (id: string) => SubagentTaskRow | undefined;
+  cancelSubagentTask?: (id: string) => SubagentTaskRow | undefined;
+  listProjects?: () => import("./harness/types.js").ProjectRow[];
 }
 
 export interface CommandResult {
@@ -124,6 +131,8 @@ function tokenize(input: string): string[] {
   return tokens;
 }
 
+export type CommandRegistrationDisposer = () => boolean;
+
 export class CommandRegistry {
   private readonly commands = new Map<string, CommandDefinition>();
 
@@ -133,8 +142,11 @@ export class CommandRegistry {
     }
   }
 
-  register(command: CommandDefinition): void {
+  register(command: CommandDefinition): CommandRegistrationDisposer {
+    if (this.commands.has(command.name)) throw new Error(`Command already registered: ${command.name}`);
     this.commands.set(command.name, command);
+    let disposed = false;
+    return () => { if (disposed) return false; disposed = true; if (this.commands.get(command.name) !== command) return false; return this.commands.delete(command.name); };
   }
 
   list(): CommandDefinition[] {
@@ -200,6 +212,69 @@ export function createCoreCommands(): CommandDefinition[] {
         ok: true,
         message: formatStatusPanel(context),
       }),
+    },
+    {
+      name: "sessions",
+      summary: "List conversation sessions",
+      usage: "/sessions",
+      category: "harness",
+      execute: (_args, context) => {
+        if (!context.harness) {
+          return { ok: false, message: "Durable harness unavailable." };
+        }
+        return { ok: true, message: "Sessions: use /runs to inspect individual runs within a session. Session auto-resumes on restart." };
+      },
+    },
+    {
+      name: "tasks",
+      summary: "List delegated sub-agent tasks",
+      usage: "/tasks",
+      category: "harness",
+      execute: (_args, context) => {
+        const tasks = context.harness?.listSubagentTasks?.(context.agent?.activeSessionId()) ?? [];
+        if (tasks.length === 0) {
+          return { ok: true, message: "No delegated sub-agent tasks recorded." };
+        }
+        const lines = ["Sub-agent tasks:"];
+        for (const task of tasks.slice(0, 20)) {
+          const label = task.description || task.prompt.slice(0, 72);
+          const child = task.childSessionId ? " child=" + task.childSessionId.slice(0, 14) : "";
+          const error = task.error ? " error=" + task.error.slice(0, 80) : "";
+          lines.push("- [" + task.status + "] depth=" + task.depth + child + " " + label + error);
+        }
+        return { ok: true, message: lines.join("\n") };
+      },
+    },
+    {
+      name: "task",
+      summary: "Inspect or cancel a delegated sub-agent task",
+      usage: "/task <id> | /task cancel <id>",
+      category: "harness",
+      execute: (args, context) => {
+        const [actionOrId, maybeId] = args;
+        if (!actionOrId) return { ok: false, message: "Usage: /task <id> | /task cancel <id>" };
+        if (actionOrId === "cancel") {
+          if (!maybeId) return { ok: false, message: "Usage: /task cancel <id>" };
+          const task = context.harness?.cancelSubagentTask?.(maybeId);
+          if (!task) return { ok: false, message: "Task not found or cannot be canceled: " + maybeId };
+          return { ok: true, message: "Task " + task.id + " is " + task.status + "." };
+        }
+        const task = context.harness?.getSubagentTask?.(actionOrId);
+        if (!task) return { ok: false, message: "Task not found: " + actionOrId };
+        const lines = [
+          "Task " + task.id,
+          "status: " + task.status + " · depth: " + task.depth,
+          "parent session: " + task.parentSessionId,
+          "child session: " + task.childSessionId,
+          "parent run: " + (task.parentRunId ?? "(unknown)"),
+          "created: " + task.createdAt,
+          "completed: " + (task.completedAt ?? "(running)"),
+          "description: " + (task.description ?? "(none)"),
+          "prompt: " + task.prompt,
+        ];
+        if (task.error) lines.push("error: " + task.error);
+        return { ok: true, message: lines.join("\n") };
+      },
     },
     {
       name: "runs",
@@ -409,6 +484,9 @@ export function createCoreCommands(): CommandDefinition[] {
         if (args.length === 0 || args[0]?.toLowerCase() === "show") {
           return { ok: true, message: formatSettingsPanel(context.config) };
         }
+        if (args[0]?.toLowerCase() === "wizard") {
+          return { ok: true, message: formatSettingsWizard(context.config) };
+        }
 
         const [rawKey, ...rawValue] = args[0]?.toLowerCase() === "set" ? args.slice(1) : args;
         if (!rawKey) {
@@ -544,7 +622,6 @@ export function createCoreCommands(): CommandDefinition[] {
             model: context.config.model,
             endpoint: context.config.endpoint,
             apiKey: formatSecretValue(context.config.apiKey),
-            apiKeyEnv: context.config.apiKeyEnv,
             goal: context.config.goal,
             pluginDir: context.config.pluginDir,
             maxToolRounds: context.config.maxToolRounds,
@@ -636,27 +713,38 @@ export function createCoreCommands(): CommandDefinition[] {
     },
     {
       name: "clear",
-      summary: "Clear context history",
+      summary: "Clear the in-memory conversation history",
       usage: "/clear",
       category: "session",
       execute: (_args, context) => {
-        // Need a runId to clear history. We will rely on harness to handle run cancellation if running.
-        // For now, we clear the active Run's messages in the database.
-        const runs = context.harness?.listRuns().filter(r => r.status === "running" || r.status === "waiting_for_approval") ?? [];
-        if (runs.length === 0) return { ok: false, message: "No active run to clear." };
-        
-        // This command should ideally trigger a new run or truncate the current run's history.
-        // For now, we will just inform the user.
-        return { ok: true, message: "Clear command acknowledged. History cleared (simulation)." };
+        if (!context.agent) {
+          return { ok: false, message: "Agent context unavailable." };
+        }
+        const cleared = context.agent.clearContext();
+        return {
+          ok: true,
+          message: cleared
+            ? "Conversation history cleared. Durable run records in the database are preserved."
+            : "No history to clear (the context already contains only the system prompt).",
+        };
       },
     },
     {
       name: "compact",
-      summary: "Compact context window by removing old tool calls",
+      summary: "Compact the in-memory context window immediately",
       usage: "/compact",
       category: "session",
       execute: (_args, context) => {
-        return { ok: true, message: "Compact command acknowledged. Tool history compacted (simulation)." };
+        if (!context.agent) {
+          return { ok: false, message: "Agent context unavailable." };
+        }
+        const compacted = context.agent.compactNow();
+        return {
+          ok: true,
+          message: compacted
+            ? "Context compacted to the sliding window. A fresh summary is being generated in the background."
+            : "Nothing to compact (context is small, or compaction is already in progress).",
+        };
       },
     },
     {
@@ -721,11 +809,24 @@ function formatMainMenu(context: CommandContext): string {
   ].join("\n");
 }
 
+function formatContextUsage(usage: import("./context.js").ContextUsage): string {
+  const ratio = usage.threshold > 0 ? (usage.estimatedTokens / usage.threshold) * 100 : 0;
+  return [
+    `~${(usage.estimatedTokens / 1000).toFixed(1)}K/${(usage.threshold / 1000).toFixed(0)}K tokens (${ratio.toFixed(0)}% of compaction budget)`,
+    `window ${(usage.contextWindow / 1000).toFixed(0)}K tokens`,
+    `last request ~${(usage.lastRequestTokens / 1000).toFixed(1)}K tokens (incl. tool results)`,
+    `${usage.messageCount} messages`,
+    usage.hasSummary ? `summary ~${(usage.summaryTokens / 1000).toFixed(1)}K tokens` : "no summary yet",
+    usage.isCompacting ? "compacting in progress" : "",
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
 function formatStatusPanel(context: CommandContext): string {
   const tools = context.tools?.list() ?? [];
   const plugins = context.plugins ?? [];
   const loadedPlugins = plugins.filter((plugin) => plugin.status === "loaded").length;
-  const apiKeyState = process.env[context.config.apiKeyEnv] ? "set" : "missing";
   const localApiKeyState = context.config.apiKey ? formatSecretValue(context.config.apiKey) : "not set";
   const durableRuns = context.harness?.listRuns().length ?? 0;
   const durableApprovals = context.harness?.listPendingApprovals().length ?? 0;
@@ -742,9 +843,12 @@ function formatStatusPanel(context: CommandContext): string {
     `Model: ${context.config.model}`,
     `Endpoint: ${context.config.endpoint}`,
     `API key: ${localApiKeyState}`,
-    `API key env fallback: ${context.config.apiKeyEnv} (${apiKeyState})`,
     `Temperature: ${context.config.temperature}`,
-    `Max tool rounds: ${context.config.maxToolRounds}`,
+    ...(context.agent
+      ? [`Context: ${formatContextUsage(context.agent.contextUsage())}`]
+      : []),
+    `Max tool rounds: ${context.config.maxToolRounds === 0 ? "unlimited (loop protection on)" : context.config.maxToolRounds}`,
+    `Context window: ${(context.config.contextWindowTokens / 1000).toFixed(0)}K tokens (compaction at ${Math.round((context.config.compactionThreshold / context.config.contextWindowTokens) * 100)}%)`,
     `Goal: ${context.config.goal || "not set"}`,
     `Review: ${context.config.review.enabled ? "on" : "off"}`,
     `Tools: ${tools.length} registered`,
@@ -938,6 +1042,39 @@ function isTerminalRunStatus(status: RunRow["status"]): boolean {
   return status === "succeeded" || status === "failed" || status === "canceled" || status === "interrupted";
 }
 
+function formatSettingsWizard(config: CorvusConfig): string {
+  return [
+    "Corvus Setting Wizard",
+    "---------------------",
+    "Run the matching command for each step you want to change, or type",
+    "/setting wizard in line mode for an interactive walkthrough.",
+    "",
+    `1. Model        current=${config.model}`,
+    "   /setting model gpt-4.1-mini",
+    "",
+    `2. Endpoint     current=${config.endpoint}`,
+    "   /setting endpoint https://api.openai.com/v1",
+    "",
+    `3. API key      current=${formatSecretValue(config.apiKey)}`,
+    "   /setting api-key sk-...",
+    "",
+    `4. Temperature  current=${config.temperature}`,
+    "   /setting temperature 0.2",
+    "",
+    `5. Tool rounds  current=${config.maxToolRounds}`,
+    "   /setting max-tool-rounds 6",
+    "",
+    `6. Runtime      plugin-dir=${config.pluginDir} review=${config.review.enabled ? "on" : "off"}`,
+    "   /setting plugin-dir plugins",
+    "   /setting review on",
+    "",
+    `Goal           ${config.goal || "not set"}`,
+    "   /setting goal Build a safer agent",
+    "",
+    "After editing, run /status to verify the active runtime.",
+  ].join("\n");
+}
+
 function formatSettingsPanel(config: CorvusConfig): string {
   return [
     "Corvus Settings",
@@ -945,9 +1082,9 @@ function formatSettingsPanel(config: CorvusConfig): string {
     `model             ${config.model}`,
     `endpoint          ${config.endpoint}`,
     `api-key           ${formatSecretValue(config.apiKey)}`,
-    `api-key-env       ${config.apiKeyEnv}`,
     `temperature       ${config.temperature}`,
-    `max-tool-rounds   ${config.maxToolRounds}`,
+    `max-tool-rounds   ${config.maxToolRounds === 0 ? "unlimited" : config.maxToolRounds}`,
+    `context-window   ${config.contextWindowTokens} tokens`,
     `plugin-dir        ${config.pluginDir}`,
     `review            ${config.review.enabled ? "on" : "off"}`,
     `goal              ${config.goal || "not set"}`,
@@ -956,7 +1093,6 @@ function formatSettingsPanel(config: CorvusConfig): string {
     "  /setting model gpt-4.1-mini",
     "  /setting endpoint https://api.openai.com/v1",
     "  /setting api-key sk-...",
-    "  /setting api-key-env OPENAI_API_KEY",
     "  /setting temperature 0.2",
     "  /setting max-tool-rounds 6",
     "  /setting plugin-dir plugins",
@@ -994,8 +1130,11 @@ export function applySetting(config: CorvusConfig, rawKey: string, rawValue: str
       config.temperature = parseNumberSetting(value, "temperature", 0, 2);
       return `temperature=${config.temperature}`;
     case "maxToolRounds":
-      config.maxToolRounds = parseIntegerSetting(value, "max-tool-rounds", 1, 50);
+      config.maxToolRounds = parseIntegerSetting(value, "max-tool-rounds", 0, 500);
       return `maxToolRounds=${config.maxToolRounds}`;
+    case "contextWindowTokens":
+      config.contextWindowTokens = parseIntegerSetting(value, "context-window-tokens", 8000, 4_000_000);
+      return `contextWindowTokens=${config.contextWindowTokens}`;
     case "pluginDir":
       config.pluginDir = value;
       return `pluginDir=${config.pluginDir}`;
@@ -1028,6 +1167,7 @@ function normalizeSettingKey(key: string):
   | "apiKeyEnv"
   | "temperature"
   | "maxToolRounds"
+  | "contextWindowTokens"
   | "pluginDir"
   | "review"
   | "reviewInstruction"
@@ -1055,6 +1195,11 @@ function normalizeSettingKey(key: string):
     case "max-tool-round":
     case "tool-rounds":
       return "maxToolRounds";
+    case "context-window-tokens":
+    case "context-window":
+    case "contextwindow":
+    case "window-tokens":
+      return "contextWindowTokens";
     case "plugin-dir":
     case "plugindir":
     case "plugins":

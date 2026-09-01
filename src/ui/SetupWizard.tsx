@@ -7,18 +7,31 @@ import type { CorvusConfig } from "../config.js";
 
 type SetupStep = "endpoint" | "model" | "apikey" | "preset" | "plugins" | "review";
 
-export function SetupWizard({ state, manager, config }: { state: RuntimeState; manager: RuntimeStateManager; config: CorvusConfig }) {
+export function SetupWizard({
+  state,
+  manager,
+  config,
+  saveConfig,
+}: {
+  state: RuntimeState;
+  manager: RuntimeStateManager;
+  config: CorvusConfig;
+  saveConfig?: () => Promise<void>;
+}) {
   const [step, setStep] = useState<SetupStep>("endpoint");
   const [endpoint, setEndpoint] = useState(config.endpoint || "https://api.openai.com/v1");
   const [model, setModel] = useState(config.model || "gpt-4o");
-  const [apiKeyEnv, setApiKeyEnv] = useState(config.apiKeyEnv || "OPENAI_API_KEY");
+  const [apiKey, setApiKey] = useState(config.apiKey || "");
 
-  const finishSetup = () => {
-    // In a full implementation, this would call saveConfig()
-    // and update the real config object.
-    config.endpoint = endpoint;
-    config.model = model;
-    config.apiKeyEnv = apiKeyEnv;
+  const finishSetup = async () => {
+    config.endpoint = endpoint.trim();
+    config.model = model.trim();
+    config.apiKey = apiKey.trim();
+    try {
+      await saveConfig?.();
+    } catch {
+      // Persistence failure is surfaced by the caller; still enter the workspace.
+    }
     manager.setMode("stream"); // Enter workspace when done
   };
 
@@ -48,10 +61,10 @@ export function SetupWizard({ state, manager, config }: { state: RuntimeState; m
 
       {step === "apikey" && (
         <Box marginTop={2} flexDirection="column">
-          <Text>Step 3: API Key Environment Variable</Text>
+          <Text>Step 3: API Key (stored in config, leave empty to skip)</Text>
           <Box marginTop={1}>
-            <Text>Env Var: </Text>
-            <TextInput value={apiKeyEnv} onChange={setApiKeyEnv} onSubmit={() => setStep("preset")} />
+            <Text>API Key: </Text>
+            <TextInput value={apiKey} onChange={setApiKey} onSubmit={() => setStep("preset")} />
           </Box>
         </Box>
       )}

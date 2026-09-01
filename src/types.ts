@@ -25,12 +25,19 @@ export interface ChatCompletionChoice {
   finish_reason?: string | null;
 }
 
+export interface UsageStats {
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
+}
+
 export interface ChatCompletionResponse {
   id?: string;
   object?: string;
   created?: number;
   model?: string;
   choices: ChatCompletionChoice[];
+  usage?: UsageStats;
 }
 
 export interface JsonSchema {

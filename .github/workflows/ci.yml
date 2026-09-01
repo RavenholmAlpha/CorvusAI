@@ -1,0 +1,68 @@
+name: CI
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npx tsc -p tsconfig.json --noEmit
+      - run: npm run build
+      - name: Package smoke test
+        shell: bash
+        run: |
+          npm pack --dry-run
+          export CORVUS_HOME="$RUNNER_TEMP/corvus-home"
+          node dist/cli.js bundle plan default
+          node dist/cli.js doctor --json
+  upgrade-compatibility:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci && npm run build
+      - name: Fresh and legacy-home smoke
+        shell: bash
+        run: |
+          export CORVUS_HOME="$RUNNER_TEMP/fresh"
+          node dist/cli.js setup default
+          node dist/cli.js doctor --json
+          mkdir -p "$RUNNER_TEMP/legacy"
+          cp tests/fixtures/legacy-config-v1.json "$RUNNER_TEMP/legacy/config.json"
+          export CORVUS_HOME="$RUNNER_TEMP/legacy"
+          node dist/cli.js doctor --json
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - run: npm run build && npm run sbom
+      - uses: actions/upload-artifact@v4
+        with:
+          name: corvus-sbom
+          path: |
+            dist/corvus.sbom.json
+            dist/corvus.sbom.sha256

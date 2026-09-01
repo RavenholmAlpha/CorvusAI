@@ -118,7 +118,7 @@ describe("durable harness stores", () => {
     expect(events.listEvents(run.id)).toEqual([
       expect.objectContaining({
         type: "run.created",
-        payload: { runId: run.id, goal: "event goal", model: "test-model", endpoint: "https://example.test/v1" },
+        payload: expect.objectContaining({ runId: run.id, goal: "event goal", model: "test-model", endpoint: "https://example.test/v1" }),
       }),
       expect.objectContaining({ id: first.id, payload: { nested: { value: 1 }, items: ["a", "b"] } }),
       expect.objectContaining({ id: second.id, payload: { ok: true } }),

@@ -7,7 +7,7 @@ const DECK_ACTIONS = [
   { label: "Stream Workbench (F2)", value: "stream" },
   { label: "Control Dashboard (F3)", value: "dashboard" },
   { label: "Setup Center", value: "setup" },
-  { label: "Return to Line Mode (Q)", value: "line" },
+  { label: "Return to Line Mode (Esc)", value: "line" },
 ];
 
 export function CommandDeck({ state, manager }: { state: RuntimeState; manager: RuntimeStateManager }) {

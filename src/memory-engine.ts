@@ -1,0 +1,11 @@
+import type { CorvusDatabase } from "./db/connection.js";
+import type { ProjectMemoryRow } from "./harness/types.js";
+import type { RunStore } from "./harness/run-store.js";
+import { cosineSimilarity, type EmbeddingProvider } from "./embeddings.js";
+export interface HybridMemoryHit{memory:ProjectMemoryRow;lexicalRank?:number;semanticScore?:number;score:number}
+export class MemoryEngine{
+ constructor(private readonly db:CorvusDatabase,private readonly store:RunStore,private readonly embeddings:EmbeddingProvider){}
+ async index(memory:ProjectMemoryRow):Promise<void>{const [vector]=await this.embeddings.embed([memory.title+"\n"+memory.content]);this.db.prepare("insert into memory_embeddings (memory_id,provider,dimensions,vector_json,updated_at) values (?,?,?,?,?) on conflict(memory_id) do update set provider=excluded.provider,dimensions=excluded.dimensions,vector_json=excluded.vector_json,updated_at=excluded.updated_at").run(memory.id,this.embeddings.id,this.embeddings.dimensions,JSON.stringify(vector),new Date().toISOString())}
+ async search(query:string,projectId:string,limit=20):Promise<HybridMemoryHit[]>{const lexical=this.store.searchProjectMemories(query,projectId,Math.max(limit,50));const [queryVector]=await this.embeddings.embed([query]);const rows=this.db.prepare("select pm.id, me.vector_json from memory_embeddings me join project_memories pm on pm.id=me.memory_id where pm.project_id=? and pm.status='active' and pm.sensitivity='normal'").all(projectId) as Array<{id:string;vector_json:string}>;const semantic=new Map(rows.map(row=>[row.id,cosineSimilarity(queryVector,JSON.parse(row.vector_json) as number[])]));const all=new Map<string,HybridMemoryHit>();lexical.forEach((memory,index)=>all.set(memory.id,{memory,lexicalRank:index,semanticScore:semantic.get(memory.id),score:0.7*(1/(index+1))+0.3*Math.max(0,semantic.get(memory.id)??0)}));for(const [id,semanticScore]of semantic){if(all.has(id))continue;const memory=this.store.listProjectMemories(projectId,1000).find(item=>item.id===id);if(memory)all.set(id,{memory,semanticScore,score:0.3*Math.max(0,semanticScore)})}return[...all.values()].sort((a,b)=>b.score-a.score).slice(0,limit)}
+ async rebuild(projectId:string):Promise<number>{const memories=this.store.listProjectMemories(projectId,10000);for(const memory of memories)await this.index(memory);return memories.length}
+}

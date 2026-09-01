@@ -1,0 +1,10 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import { createDefaultConfig } from "../src/config.js";
+import { PluginManagementService } from "../src/plugin-management.js";
+import { openCorvusDatabase } from "../src/db/connection.js";
+import { ensureDatabase } from "../src/db/migrations.js";
+import { runDoctor } from "../src/doctor.js";
+describe("operational doctor",()=>{it("checks configuration, database and plugins",async()=>{const root=await mkdtemp(join(tmpdir(),"corvus-doctor-"));try{const config=createDefaultConfig();const db=openCorvusDatabase(join(root,"corvus.db"));ensureDatabase(db);const manager=new PluginManagementService(join(root,"plugins"),config,async()=>{});const result=await runDoctor(config,root,manager,db);expect(result.ok).toBe(true);expect(result.checks).toEqual(expect.arrayContaining([expect.objectContaining({id:"database",status:"ok"}),expect.objectContaining({id:"plugins",status:"ok"})]));db.close()}finally{await rm(root,{recursive:true,force:true})}})});

@@ -1,41 +1,87 @@
 {
-  "name": "corvus",
+  "name": "@ravenholmalpha/corvus",
   "version": "0.1.0",
-  "description": "Corvus AI agent harness with a cassette-futurist TUI.",
+  "description": "Corvus AI agent orchestration platform with durable runs, roles, skills, MCP, memory, TUI, and WebUI.",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js"
+    },
+    "./plugin-sdk": {
+      "import": "./dist/plugins.js"
+    }
+  },
   "bin": {
     "corvus": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "builtin",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:web && tsc -p tsconfig.json && node -e \"const fs = require('node:fs'); if (fs.existsSync('builtin')) fs.cpSync('builtin', 'dist/builtin', {recursive: true, force: true});\"",
+    "build:web": "tsc -p webui/tsconfig.json --noEmit && vite build --config webui/vite.config.ts",
+    "dev:web": "vite --config webui/vite.config.ts",
     "dev": "tsx src/cli.ts",
     "start": "node dist/cli.js",
-    "test": "vitest run",
+    "test": "npm run test:web && vitest run",
+    "test:web": "vitest run --config webui/vitest.config.ts",
     "test:watch": "vitest",
-    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit"
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "sbom": "node scripts/generate-sbom.mjs",
+    "release:manifest": "node scripts/generate-release-manifest.mjs",
+    "release:sign": "node scripts/sign-release-manifest.mjs",
+    "prepack": "npm run build"
   },
   "keywords": [
-    "agent",
+    "ai-agent",
+    "agent-orchestration",
+    "mcp",
+    "skills",
+    "memory",
+    "cli",
     "tui",
-    "openai",
-    "tools",
-    "plugins"
+    "webui"
   ],
+  "homepage": "https://github.com/RavenholmAlpha/CorvusAI#readme",
+  "bugs": {
+    "url": "https://github.com/RavenholmAlpha/CorvusAI/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RavenholmAlpha/CorvusAI.git"
+  },
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
   "dependencies": {
     "ajv": "^8.20.0",
     "better-sqlite3": "^12.11.1",
     "ink": "^7.1.0",
     "ink-select-input": "^6.2.0",
     "ink-text-input": "^6.0.0",
-    "react": "^19.2.7"
+    "react": "^19.2.7",
+    "react-dom": "^19.2.8"
   },
   "devDependencies": {
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.6",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.0.10",
     "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^4.7.0",
+    "jsdom": "^26.1.0",
     "tsx": "^4.20.3",
     "typescript": "^5.8.3",
+    "vite": "^7.3.6",
     "vitest": "^3.2.4"
   }
 }

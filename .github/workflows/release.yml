@@ -1,0 +1,59 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: Publish the package to npm
+        required: true
+        default: true
+        type: boolean
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    environment: release
+    env:
+      CORVUS_RELEASE_PRIVATE_KEY: ${{ secrets.CORVUS_RELEASE_PRIVATE_KEY }}
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      - name: Verify tag matches package version
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: test "$GITHUB_REF_NAME" = "v$(node -p \"require('./package.json').version\")"
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: npm run sbom
+      - run: npm run release:manifest
+      - name: Sign release manifest
+        if: env.CORVUS_RELEASE_PRIVATE_KEY != ''
+        run: npm run release:sign
+      - name: Pack npm artifact
+        run: npm pack
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            ravenholmalpha-corvus-*.tgz
+            dist/release-manifest.json
+            dist/release-manifest.sig
+            dist/corvus.sbom.json
+            dist/corvus.sbom.sha256
+          fail_on_unmatched_files: false
+      - name: Publish npm with provenance
+        if: env.NPM_TOKEN != '' && (github.event_name == 'push' || inputs.publish_npm)
+        env:
+          NODE_AUTH_TOKEN: ${{ env.NPM_TOKEN }}
+        run: npm publish --provenance --access public

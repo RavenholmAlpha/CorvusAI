@@ -1,0 +1,14 @@
+import { createToolManifest, type ToolManifest } from "./tools/protocol.js";
+import type { BrowserRuntime } from "./browser-runtime.js";
+import type { JsonSchema } from "./types.js";
+const base={namespace:"browser",version:"1.0.0",capability:"browser.control",risk:"high" as const,timeoutMs:30000,outputLimitBytes:20000,concurrency:{perTool:1,perRun:1,global:1},evidencePolicy:"summary" as const,resources:["browser"]};
+const schema=(properties:Record<string,JsonSchema>,required:string[]=[]):JsonSchema=>({type:"object",properties,required,additionalProperties:false});const str=(description:string)=>({type:"string",description});const num=(description:string)=>({type:"number",description});
+export function createBrowserTools(browser:BrowserRuntime):ToolManifest[]{return[
+ createToolManifest({...base,name:"browser_pages",description:"List browser pages.",risk:"low",parameters:schema({}),execute:async()=>({ok:true,output:await browser.listPages()})}),
+ createToolManifest({...base,name:"browser_open",description:"Open a safe public HTTP(S) page.",parameters:schema({url:str("URL to open")},["url"]),execute:async({url}:any)=>({ok:true,output:await browser.newPage(url)})}),
+ createToolManifest({...base,name:"browser_navigate",description:"Navigate an existing page to a safe public HTTP(S) URL.",parameters:schema({pageId:str("Page ID"),url:str("URL")},["pageId","url"]),execute:async({pageId,url}:any)=>{await browser.navigate(pageId,url);return{ok:true,output:{pageId,url}}}}),
+ createToolManifest({...base,name:"browser_snapshot",description:"Read a bounded DOM snapshot from a page.",risk:"low",parameters:schema({pageId:str("Page ID")},["pageId"]),execute:async({pageId}:any)=>({ok:true,output:await browser.snapshot(pageId)})}),
+ createToolManifest({...base,name:"browser_click",description:"Click page coordinates.",parameters:schema({pageId:str("Page ID"),x:num("X coordinate"),y:num("Y coordinate")},["pageId","x","y"]),execute:async({pageId,x,y}:any)=>{await browser.click(pageId,x,y);return{ok:true,output:{clicked:true}}}}),
+ createToolManifest({...base,name:"browser_type",description:"Type non-secret text into the focused element.",parameters:schema({pageId:str("Page ID"),text:str("Non-secret text")},["pageId","text"]),execute:async({pageId,text}:any)=>{await browser.type(pageId,text);return{ok:true,output:{typedCharacters:text.length}}}}),
+ createToolManifest({...base,name:"browser_press",description:"Press a key in a page.",parameters:schema({pageId:str("Page ID"),key:str("Key")},["pageId","key"]),execute:async({pageId,key}:any)=>{await browser.press(pageId,key);return{ok:true,output:{key}}}}),
+ createToolManifest({...base,name:"browser_screenshot",description:"Capture a page screenshot as base64 PNG.",risk:"low",parameters:schema({pageId:str("Page ID")},["pageId"]),execute:async({pageId}:any)=>({ok:true,output:{data:await browser.screenshot(pageId)}})})]}

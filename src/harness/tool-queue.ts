@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import type { CorvusDatabase } from "../db/connection.js";
 import type { JsonObject as DurableJsonObject, JsonValue } from "../json.js";
 import type { JsonObject as ToolInputObject } from "../types.js";
@@ -200,6 +201,19 @@ export class ToolQueue {
     return row ? mapToolCallRow(row as ToolCallDbRow) : undefined;
   }
 
+  listToolCalls(runId: string): ToolCallRow[] {
+    const rows = this.db
+      .prepare(
+        `select id, run_id, step_id, tool_name, capability, status, arguments_json, result_json, error,
+                timeout_ms, created_at, started_at, completed_at
+         from tool_calls
+         where run_id = ?
+         order by created_at, id`,
+      )
+      .all(runId);
+    return rows.map((row) => mapToolCallRow(row as ToolCallDbRow));
+  }
+
   private createToolCall(input: EnqueueToolCallInput): ToolCallRow {
     return this.db.transaction(() => {
       const args = serializeDurableJsonObject(input.args, "tool arguments");
@@ -367,6 +381,18 @@ export class ToolQueue {
     })();
   }
 
+  private resolveRunCwd(runId: string): string {
+    const row = this.db.prepare("select projects.path from runs join sessions on sessions.id = runs.session_id join projects on projects.id = sessions.project_id where runs.id = ?").get(runId) as { path: string } | undefined;
+    if (row?.path) {
+      try {
+        if (existsSync(row.path)) {
+          return row.path;
+        }
+      } catch {}
+    }
+    return process.cwd();
+  }
+
   private async executeWithTimeout(
     toolCall: ToolCallRow,
     tool: ToolManifest,
@@ -379,7 +405,7 @@ export class ToolQueue {
       runId: toolCall.runId,
       toolCallId: toolCall.id,
       signal: controller.signal,
-      cwd: process.cwd(),
+      cwd: this.resolveRunCwd(toolCall.runId),
       timeoutMs,
       outputLimitBytes: tool.outputLimitBytes,
     };

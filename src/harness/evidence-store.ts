@@ -79,6 +79,10 @@ export class EvidenceStore {
     return row ? mapEvidenceRow(row as EvidenceDbRow) : undefined;
   }
 
+  listRecent(limit = 100): EvidenceRow[] {
+    return this.db.prepare("select id, run_id, source_type, source_id, title, summary, content, created_at from evidence order by created_at desc, id desc limit ?").all(limit).map((row) => mapEvidenceRow(row as EvidenceDbRow));
+  }
+
   listEvidence(runId: string): EvidenceRow[] {
     return this.db
       .prepare(

@@ -1,0 +1,12 @@
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
+const pluginRoot=process.env.CORVUS_PLUGIN_ROOT; if(pluginRoot)process.chdir(pluginRoot);
+const sandbox=JSON.parse(process.env.CORVUS_PLUGIN_SANDBOX??"{}");
+if(sandbox.network==="none")globalThis.fetch=async()=>{throw new Error("Worker network access denied by sandbox policy")};
+let send=(value:unknown)=>process.stdout.write(JSON.stringify(value)+"\n");
+const entry=process.argv[2];if(!entry)throw new Error("Worker plugin entry missing");
+const module=await import(pathToFileURL(entry).href);const activate=module.default??module.activate;if(!activate)throw new Error("Worker plugin does not export activate/default");
+const tools=new Map<string,(input:Record<string,unknown>)=>unknown>();
+await activate({manifest:JSON.parse(process.env.CORVUS_PLUGIN_MANIFEST??"{}"),registerTool:(tool:any)=>{tools.set(tool.name,tool.execute);send({event:"tool",tool:{name:tool.name,description:tool.description,capability:tool.capability,parameters:tool.parameters,risk:tool.risk}})},storage:{get:async()=>undefined,set:async()=>{},delete:async()=>{}},logger:{info:()=>{},warn:()=>{},error:()=>{}},getConfig:()=>JSON.parse(process.env.CORVUS_PLUGIN_CONFIG??"null")});send({event:"ready"});
+const heartbeat=setInterval(()=>send({event:"heartbeat"}),5000);heartbeat.unref?.();
+const rl=createInterface({input:process.stdin});rl.on("line",async line=>{try{const request=JSON.parse(line);if(request.method==="call"){const handler=tools.get(request.name);if(!handler)throw new Error("Unknown worker tool");const result=await handler(request.input);send({id:request.id,result})}else if(request.method==="shutdown"){clearInterval(heartbeat);await module.deactivate?.();send({id:request.id,result:true});process.exit(0)}}catch(error){send({id:JSON.parse(line).id,error:(error as Error).message})}});

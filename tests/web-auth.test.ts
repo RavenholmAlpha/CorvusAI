@@ -1,0 +1,11 @@
+import { afterEach, describe, expect, it } from "vitest";
+import { createDefaultConfig } from "../src/config.js";
+import { openCorvusDatabase, type CorvusDatabase } from "../src/db/connection.js";
+import { ensureDatabase } from "../src/db/migrations.js";
+import { EventLog } from "../src/harness/event-log.js";
+import { RunStore } from "../src/harness/run-store.js";
+import { EvidenceStore } from "../src/harness/evidence-store.js";
+import { ApprovalService } from "../src/harness/approval-service.js";
+import { startWebControlPlane } from "../src/web/server.js";
+let db: CorvusDatabase|undefined;let close:(()=>Promise<void>)|undefined;const oldHome=process.env.CORVUS_HOME,oldPassword=process.env.CORVUS_SECRET_PASSWORD;afterEach(async()=>{await close?.();if(db?.open)db.close();if(oldHome===undefined)delete process.env.CORVUS_HOME;else process.env.CORVUS_HOME=oldHome;if(oldPassword===undefined)delete process.env.CORVUS_SECRET_PASSWORD;else process.env.CORVUS_SECRET_PASSWORD=oldPassword});
+describe("Web control authentication",()=>{it("rejects unauthenticated API calls and accepts the generated access token",async()=>{db=openCorvusDatabase(":memory:");ensureDatabase(db);const config=createDefaultConfig();const events=new EventLog(db);const runs=new RunStore(db,events);const evidence=new EvidenceStore(db,events);const approvals=new ApprovalService(db,events,config.permissions,evidence);const web=await startWebControlPlane({config,runs,approvals,saveConfig:async()=>undefined,port:0});close=web.close;expect((await fetch(web.url+"api/state")).status).toBe(401);const token=new URL(web.accessUrl).searchParams.get("token")!;expect((await fetch(web.url+"api/state",{headers:{"x-corvus-token":token}})).status).toBe(200);process.env.CORVUS_HOME=process.env.TEMP+"/corvus-web-secret-"+Date.now();process.env.CORVUS_SECRET_PASSWORD="password";const created=await fetch(web.url+"api/v1/secrets",{method:"POST",headers:{"content-type":"application/json","x-corvus-token":token},body:JSON.stringify({name:"TEST_TOKEN",value:"secret"})});expect(created.status).toBe(201);const listed=await fetch(web.url+"api/v1/secrets",{headers:{"x-corvus-token":token}}).then(r=>r.json());expect(listed).toEqual([{name:"TEST_TOKEN",configured:true}])})});

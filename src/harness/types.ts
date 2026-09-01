@@ -34,7 +34,97 @@ export type ToolCallStatus =
   | "canceled"
   | "interrupted";
 export type ApprovalStatus = "pending" | "approved" | "denied" | "expired";
+export type SubagentTaskStatus = "running" | "succeeded" | "failed" | "canceled";
+export type ScopeLeaseStatus = "active" | "released";
 export type DecisionScope = "once" | "always" | "never";
+
+
+export interface AgentRow {
+  id: string;
+  kind: "master" | "project" | "worker";
+  projectId: string | null;
+  parentAgentId: string | null;
+  roleId: string | null;
+  status: "active" | "idle" | "stopped";
+  config: JsonObject | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectRow {
+  id: string;
+  name: string;
+  path: string;
+  config: JsonObject | null;
+  lastSessionId: string | null;
+  mainAgentId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SessionRow {
+  id: string;
+  projectId: string | null;
+  agentId: string | null;
+  kind: "master" | "project_main" | "worker";
+  parentSessionId: string | null;
+  name: string | null;
+  preview: string | null;
+  messageCount: number;
+  totalTokens: number;
+  createdAt: string;
+  lastActiveAt: string;
+  archivedAt: string | null;
+}
+
+export interface SubagentTaskRow {
+  id: string;
+  parentRunId: string | null;
+  parentSessionId: string;
+  childSessionId: string;
+  prompt: string;
+  description: string | null;
+  modelProfile: string | null;
+  agentScope: "project" | "global";
+  projectId: string | null;
+  parentTaskId: string | null;
+  depth: number;
+  status: SubagentTaskStatus;
+  error: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export interface ScopeLeaseRow {
+  id: string;
+  taskId: string;
+  scope: string;
+  status: ScopeLeaseStatus;
+  createdAt: string;
+  heartbeatAt: string;
+  expiresAt: string;
+  conflictLevel: "none" | "hierarchical";
+  releasedAt: string | null;
+}
+
+export interface ProjectMemoryRow {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  kind: "architecture" | "decision" | "pitfall" | "convention" | "handoff" | "open_issue";
+  title: string;
+  content: string;
+  confidence: number;
+  status: "active" | "obsolete";
+  scope: "session" | "project" | "global";
+  sourceType: "manual" | "handoff" | "message" | "tool" | "import";
+  sourceId: string | null;
+  contentHash: string | null;
+  verified: boolean;
+  sensitivity: "normal" | "sensitive";
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface RunRow {
   id: string;
@@ -42,6 +132,7 @@ export interface RunRow {
   goal: string;
   model: string;
   endpoint: string;
+  sessionId: string | null;
   createdAt: string;
   updatedAt: string;
   completedAt: string | null;

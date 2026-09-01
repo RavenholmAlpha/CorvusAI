@@ -1,0 +1,5 @@
+type Labels=Record<string,string|number|boolean|undefined>;
+function key(name:string,labels:Labels={}):string{return name+"|"+Object.entries(labels).filter(([,value])=>value!==undefined).sort(([a],[b])=>a.localeCompare(b)).map(([label,value])=>label+"="+String(value)).join(",")}
+function escape(value:string):string{return value.replace(/\\/g,"\\\\").replace(/\"/g,'\\"').replace(/\n/g,"\\n")}
+export class MetricsRegistry{private counters=new Map<string,number>();private gauges=new Map<string,number>();inc(name:string,labels:Labels={},amount=1):void{const id=key(name,labels);this.counters.set(id,(this.counters.get(id)??0)+amount)}set(name:string,value:number,labels:Labels={}):void{this.gauges.set(key(name,labels),value)}render():string{const lines:string[]=[];for(const [id,value]of[...this.counters,...this.gauges]){const [name,raw]=id.split("|");const labels=raw?raw.split(",").map(part=>{const index=part.indexOf("=");return part.slice(0,index)+'="'+escape(part.slice(index+1))+'"'}).join(","):"";lines.push(name+(labels?"{"+labels+"}":"")+" "+value)}return lines.sort().join("\n")+"\n"}}
+export const metrics=new MetricsRegistry();

@@ -1,11 +1,12 @@
 import Database from "better-sqlite3";
 import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
+import { getConfigRoot } from "../config.js";
 
 export type CorvusDatabase = Database.Database;
 
-export function defaultDatabasePath(cwd = process.cwd()): string {
-  return resolve(cwd, ".corvus", "corvus.db");
+export function defaultDatabasePath(): string {
+  return join(getConfigRoot(), "corvus.db");
 }
 
 export function openCorvusDatabase(path = defaultDatabasePath()): CorvusDatabase {

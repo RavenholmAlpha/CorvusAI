@@ -137,7 +137,7 @@ describe("database migrations", () => {
     }
     expect(tableColumns(db, "schema_migrations")).toContain("applied_at");
     expect(tableColumns(db, "messages")).toContain("metadata_json");
-    expect(db.prepare("select created_at, applied_at from schema_migrations where version = 1").get()).toEqual({
+    expect(db.prepare("select created_at, applied_at from schema_migrations where version = 10").get()).toEqual({
       created_at: expect.any(String),
       applied_at: expect.any(String),
     });

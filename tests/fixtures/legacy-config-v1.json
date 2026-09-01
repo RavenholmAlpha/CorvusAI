@@ -1,0 +1,1 @@
+{"name":"Corvus","endpoint":"https://api.openai.com/v1","model":"legacy-model","apiKey":"","apiKeyEnv":"OPENAI_API_KEY","goal":"","pluginDir":"plugins","maxToolRounds":10,"contextWindowTokens":100000,"temperature":0.2,"permissions":{"rules":{}},"review":{"enabled":false,"instruction":"review"},"systemPrompt":"legacy","compactionThreshold":70000,"theme":"cassette"}

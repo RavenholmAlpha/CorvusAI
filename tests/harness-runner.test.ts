@@ -438,15 +438,15 @@ describe("HarnessRunner", () => {
     expect(runs.getRun(paused.runId)?.status).toBe("failed");
   });
 
-  it("fails before executing tool calls when the next tool round would exceed maxToolRounds", async () => {
+  it("fails when the next tool round would exceed a configured maxToolRounds", async () => {
     const { config, events, runs, evidence, queue, tools } = await createHarness((current) => {
-      current.maxToolRounds = 0;
+      current.maxToolRounds = 1;
     });
     let executions = 0;
     tools.register(
       echoTool("local", () => {
         executions += 1;
-        return { ok: true, output: "should not execute" };
+        return { ok: true, output: "executed" };
       }),
     );
     const model = {
@@ -470,20 +470,63 @@ describe("HarnessRunner", () => {
     };
     const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
 
-    await expect(runner.runTurn("round limit")).rejects.toThrow("Tool loop exceeded maxToolRounds=0");
+    await expect(runner.runTurn("round limit")).rejects.toThrow("Tool loop exceeded maxToolRounds=1");
 
     const run = runs.listRuns()[0];
     expect(run).toMatchObject({ status: "failed" });
-    expect(executions).toBe(0);
-    expect(evidence.listEvidence(run.id)).toEqual([
-      expect.objectContaining({
-        sourceType: "model_error",
-        summary: "Tool loop exceeded maxToolRounds=0",
-      }),
-    ]);
+    // Round 0 executed once; the round-1 check fired before the second execution.
+    expect(executions).toBe(1);
+    expect(evidence.listEvidence(run.id)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sourceType: "model_error",
+          summary: "Tool loop exceeded maxToolRounds=1",
+        }),
+      ]),
+    );
     expect(events.listEvents(run.id).map((event) => event.type)).toContain("model.error");
-    expect(events.listEvents(run.id).map((event) => event.type)).not.toContain("model_error");
-    expect(events.listEvents(run.id).filter((event) => event.type === "tool_call.created")).toEqual([]);
+  });
+
+  it("stops repeated identical tool calls when maxToolRounds is unlimited", async () => {
+    const { config, events, runs, evidence, queue, tools } = await createHarness((current) => {
+      current.maxToolRounds = 0; // unlimited
+      current.maxConsecutiveIdenticalToolCalls = 3;
+    });
+    let executions = 0;
+    tools.register(
+      echoTool("local", () => {
+        executions += 1;
+        return { ok: true, output: "loop" };
+      }),
+    );
+    const model = {
+      createChatCompletion: async (): Promise<ChatCompletionResponse> => ({
+        choices: [
+          {
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [
+                {
+                  id: "call_loop",
+                  type: "function",
+                  function: { name: "echo", arguments: JSON.stringify({ text: "same" }) },
+                },
+              ],
+            },
+          },
+        ],
+      }),
+    };
+    const runner = new HarnessRunner({ config, model, tools, runs, queue, evidence, events });
+
+    await expect(runner.runTurn("loop")).rejects.toThrow("Repeated identical tool call \"echo\" 3 times");
+
+    const run = runs.listRuns()[0];
+    expect(run).toMatchObject({ status: "failed" });
+    // Two identical calls execute; the third is rejected by loop protection.
+    expect(executions).toBe(2);
+    expect(events.listEvents(run.id).map((event) => event.type)).toContain("model.error");
   });
 
   it("returns unknown tool and malformed argument failures as durable tool messages so the model can self-correct", async () => {

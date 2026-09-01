@@ -1,0 +1,3 @@
+import { describe, expect, it } from "vitest";
+import { curateHandoff } from "../src/memory-curator.js";
+describe("project memory curator",()=>{it("extracts risks decisions and open issues from structured handoffs",()=>{const result=curateHandoff("Architecture review","# Decisions\n- Use provider-role separation\n# Risks\n- Provider fallback may hide outages\n# Open Questions\n- Should retries be per role?");expect(result).toEqual(expect.arrayContaining([expect.objectContaining({kind:"handoff"}),expect.objectContaining({kind:"decision",content:"Use provider-role separation"}),expect.objectContaining({kind:"pitfall",content:"Provider fallback may hide outages"}),expect.objectContaining({kind:"open_issue",content:"Should retries be per role?"})]))})});

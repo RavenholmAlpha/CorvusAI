@@ -4,3 +4,10 @@ dist/
 .superpowers/
 .worktrees/
 *.log
+hermes-agent/
+openclaw/
+pi-main/
+.npm-cache/
+.release-smoke-home/
+.install-smoke/
+*.tgz

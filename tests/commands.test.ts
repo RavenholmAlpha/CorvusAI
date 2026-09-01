@@ -3,11 +3,34 @@ import { CommandRegistry, createCoreCommands, parseSlashCommand } from "../src/c
 import { createDefaultConfig } from "../src/config.js";
 
 describe("slash commands", () => {
+  it("rejects duplicate commands and disposes registrations safely", async () => {
+    const registry = new CommandRegistry(); const command = { name: "temp", summary: "Temp", usage: "/temp", execute: () => ({ ok: true, message: "ok" }) };
+    const dispose = registry.register(command); expect(() => registry.register(command)).toThrow("already registered"); expect(dispose()).toBe(true); expect(dispose()).toBe(false);
+    const result = await registry.execute("/temp", { config: createDefaultConfig(), write: () => undefined }); expect(result.ok).toBe(false);
+  });
   it("parses a slash command with quoted arguments", () => {
     expect(parseSlashCommand('/model "gpt-4.1-mini" --endpoint https://api.example.test/v1')).toEqual({
       name: "model",
       args: ["gpt-4.1-mini", "--endpoint", "https://api.example.test/v1"],
     });
+  });
+
+  it("configures the context window and tool rounds through /setting", async () => {
+    const config = createDefaultConfig();
+    const registry = new CommandRegistry(createCoreCommands());
+
+    await registry.execute("/setting context-window-tokens 2000000", { config, write: () => undefined });
+    expect(config.contextWindowTokens).toBe(2_000_000);
+
+    await registry.execute("/setting max-tool-rounds 30", { config, write: () => undefined });
+    expect(config.maxToolRounds).toBe(30);
+  });
+
+  it("has long-running defaults by default", () => {
+    const config = createDefaultConfig();
+    expect(config.maxToolRounds).toBe(0);
+    expect(config.contextWindowTokens).toBe(1_000_000);
+    expect(config.compactionThreshold).toBe(700_000);
   });
 
   it("updates the active goal through /goal", async () => {
@@ -133,7 +156,7 @@ describe("slash commands", () => {
       config,
       write: () => undefined,
     });
-    const rounds = await registry.execute("/setting max-tool-rounds 0", {
+    const rounds = await registry.execute("/setting max-tool-rounds 501", {
       config,
       write: () => undefined,
     });

@@ -1,0 +1,10 @@
+import { readFile, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+const pkg=JSON.parse(await readFile(new URL("../package.json",import.meta.url),"utf8"));
+const lock=JSON.parse(await readFile(new URL("../package-lock.json",import.meta.url),"utf8"));
+const components=Object.entries(lock.packages??{}).filter(([path])=>path).map(([path,value])=>{const item=value;const name=item.name??path.split("node_modules/").at(-1);return{type:"library",name,version:item.version??"unknown",...(item.name&&item.version?{purl:"pkg:npm/"+encodeURIComponent(item.name)+"@"+item.version}:{})}});
+const bom={bomFormat:"CycloneDX",specVersion:"1.5",serialNumber:"urn:uuid:"+randomUUID(),version:1,metadata:{timestamp:new Date().toISOString(),component:{type:"application",name:pkg.name,version:pkg.version}},components};
+const text=JSON.stringify(bom,null,2)+"\n";
+await writeFile(new URL("../dist/corvus.sbom.json",import.meta.url),text);
+await writeFile(new URL("../dist/corvus.sbom.sha256",import.meta.url),createHash("sha256").update(text).digest("hex")+"  corvus.sbom.json\n");
+console.log("Wrote SBOM with "+components.length+" components");

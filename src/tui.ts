@@ -77,6 +77,8 @@ export interface CorvusTuiOptions {
   saveConfig?: () => Promise<void>;
   plugins?: Array<{ name: string; version: string; status: string }>;
   initialMode?: "line" | "stream" | "dashboard" | "setup";
+  activeProjectId?: string;
+  selectProject?: (projectId: string) => Promise<boolean>;
 }
 
 import { RuntimeStateManager } from "./runtime-state.js";
@@ -86,6 +88,7 @@ export class CorvusTui {
   private readonly input: Readable;
   private readonly output: Writable;
   private readonly stateManager: RuntimeStateManager;
+  private settingsWizard?: SettingsWizardSession;
   private running = true;
   private needsLabel = true;
 
@@ -98,21 +101,36 @@ export class CorvusTui {
       for (const tool of this.options.tools.list()) {
         const originalExecute = tool.execute.bind(tool);
         tool.execute = async (input, context) => {
-          if (!this.needsLabel) {
+          const activityId = `tool_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          const startedAt = Date.now();
+          const inInkMode = this.stateManager.get().mode !== "line";
+          if (inInkMode) {
+            // Ink owns the full screen: render activity inside the component tree.
+            this.stateManager.addToolActivity({ id: activityId, toolName: tool.name, status: "running", startedAt });
+          } else if (!this.needsLabel) {
             this.write("\n");
           }
-          this.write(`\x1b[35m⠋ ⚙️ 正在调用工具: ${tool.name}...\x1b[0m\n`);
-          const start = Date.now();
+          if (!inInkMode) {
+            this.write(`\x1b[35m⠋ ⚙️ 正在调用工具: ${tool.name}...\x1b[0m\n`);
+          }
           try {
             const res = await originalExecute(input, context);
-            const ms = Date.now() - start;
-            this.write(`\x1b[32m✔ 工具 ${tool.name} 执行完毕 (${(ms / 1000).toFixed(1)}s)\x1b[0m\n`);
-            this.needsLabel = true;
+            const ms = Date.now() - startedAt;
+            if (inInkMode) {
+              this.stateManager.updateToolActivity(activityId, { status: "succeeded", elapsedMs: ms });
+            } else {
+              this.write(`\x1b[32m✔ 工具 ${tool.name} 执行完毕 (${(ms / 1000).toFixed(1)}s)\x1b[0m\n`);
+              this.needsLabel = true;
+            }
             return res;
           } catch (e: any) {
-            const ms = Date.now() - start;
-            this.write(`\x1b[31m✖ 工具 ${tool.name} 执行失败 (${(ms / 1000).toFixed(1)}s): ${e.message}\x1b[0m\n`);
-            this.needsLabel = true;
+            const ms = Date.now() - startedAt;
+            if (inInkMode) {
+              this.stateManager.updateToolActivity(activityId, { status: "failed", elapsedMs: ms, detail: e.message });
+            } else {
+              this.write(`\x1b[31m✖ 工具 ${tool.name} 执行失败 (${(ms / 1000).toFixed(1)}s): ${e.message}\x1b[0m\n`);
+              this.needsLabel = true;
+            }
             throw e;
           }
         };
@@ -121,7 +139,7 @@ export class CorvusTui {
   }
 
   async start(): Promise<void> {
-    while (this.running) {
+    while (this.running && !this.stateManager.get().exitRequested) {
       if (this.stateManager.get().mode === "line") {
         await this.runLineMode();
       } else {
@@ -140,11 +158,24 @@ export class CorvusTui {
         stateManager: this.stateManager,
         agent: this.options.agent,
         config: this.options.config,
+        commands: this.options.commands,
+        tools: this.options.tools,
+        harness: this.options.harness,
+        plugins: this.options.plugins,
+        saveConfig: this.options.saveConfig,
+        activeProjectId: this.options.activeProjectId,
+        selectProject: this.options.selectProject,
       })
     );
     
     await instance.waitUntilExit();
     
+    // Ink also exits on the built-in Ctrl+C handler. In that case the mode
+    // never switched to "line" (we only switch modes through stateManager),
+    // so this is a real exit request: stop the run loop instead of re-rendering.
+    if (this.stateManager.get().mode !== "line") {
+      this.running = false;
+    }
     // Ensure stdin is referenced and resumed so readline can capture it again
     if (this.input.isPaused && this.input.isPaused()) {
       this.input.resume();
@@ -174,10 +205,40 @@ export class CorvusTui {
     for await (const line of this.rl) {
       const trimmed = line.trim();
 
+      // Interactive setting wizard owns the input while active.
+      // This must run before the empty-line check: an empty line means
+      // "keep the current value" for the active step.
+      if (this.settingsWizard && trimmed === "/exit") {
+        this.settingsWizard = undefined;
+      }
+      if (this.settingsWizard) {
+        const result = this.settingsWizard.handle(line);
+        this.write(result.message);
+        if (result.status === "complete") {
+          Object.assign(this.options.config, result.config);
+          await this.options.saveConfig?.();
+          this.settingsWizard = undefined;
+          this.write(promptLabel());
+        } else if (result.status === "cancel") {
+          this.settingsWizard = undefined;
+          this.write(promptLabel());
+        } else {
+          this.write(this.settingsWizard.prompt());
+        }
+        continue;
+      }
+
       if (!trimmed) {
         if (this.running && this.stateManager.get().mode === "line") {
           this.write(promptLabel());
         }
+        continue;
+      }
+
+      if (trimmed.toLowerCase() === "/setting wizard") {
+        this.settingsWizard = new SettingsWizardSession(this.options.config);
+        this.write(this.settingsWizard.startMessage());
+        this.write(this.settingsWizard.prompt());
         continue;
       }
 
@@ -190,6 +251,7 @@ export class CorvusTui {
       if (trimmed.startsWith("/")) {
         const result = await this.options.commands.execute(trimmed, {
           config: this.options.config,
+          agent: this.options.agent,
           tools: this.options.tools,
           harness: this.options.harness,
           runtimeState: this.stateManager,
@@ -420,4 +482,99 @@ export class CorvusTui {
   private write(message: string): void {
     this.output.write(message);
   }
+}
+
+type SettingsWizardStep = {
+  key: string;
+  label: string;
+  current: (config: CorvusConfig) => string;
+};
+
+const settingsWizardSteps: SettingsWizardStep[] = [
+  { key: "model", label: "Model", current: (config) => config.model },
+  { key: "endpoint", label: "Endpoint", current: (config) => config.endpoint },
+  {
+    key: "api-key",
+    label: "API key",
+    current: (config) => (config.apiKey ? maskSecret(config.apiKey) : "not set"),
+  },
+  { key: "temperature", label: "Temperature", current: (config) => String(config.temperature) },
+  { key: "max-tool-rounds", label: "Tool rounds", current: (config) => String(config.maxToolRounds) },
+  { key: "plugin-dir", label: "Plugin dir", current: (config) => config.pluginDir },
+  { key: "review", label: "Review", current: (config) => (config.review.enabled ? "on" : "off") },
+  { key: "goal", label: "Goal", current: (config) => config.goal || "not set" },
+];
+
+class SettingsWizardSession {
+  private readonly draft: CorvusConfig;
+  private index = 0;
+
+  constructor(config: CorvusConfig) {
+    this.draft = cloneConfig(config);
+  }
+
+  startMessage(): string {
+    return [
+      "Interactive Setting Wizard",
+      "--------------------------",
+      "Enter a value for each setting. Press Enter to keep current. Type /cancel to stop without saving.",
+      "",
+    ].join("\n");
+  }
+
+  prompt(): string {
+    const step = settingsWizardSteps[this.index];
+    return `${colors.orange}settings>${colors.reset} ${this.index + 1}/${settingsWizardSteps.length} ${step.label} [${step.current(this.draft)}]: `;
+  }
+
+  handle(line: string): { status: "continue" | "complete" | "cancel"; message: string; config?: CorvusConfig } {
+    const answer = line.trim();
+    if (answer.toLowerCase() === "/cancel") {
+      return { status: "cancel", message: "\nSetting wizard canceled. No changes saved.\n" };
+    }
+    if (answer.startsWith("/")) {
+      return {
+        status: "continue",
+        message: `\n${errorLine("wizard is active; enter a value, press Enter, or type /cancel")}\n`,
+      };
+    }
+
+    const step = settingsWizardSteps[this.index];
+    if (answer.length > 0) {
+      try {
+        applySetting(this.draft, step.key, [answer]);
+      } catch (error) {
+        return { status: "continue", message: `\n${errorLine((error as Error).message)}\n` };
+      }
+    }
+
+    this.index += 1;
+    if (this.index >= settingsWizardSteps.length) {
+      return {
+        status: "complete",
+        message: "\nSetting wizard complete. Saved configuration.\n",
+        config: this.draft,
+      };
+    }
+
+    return { status: "continue", message: "\n" };
+  }
+}
+
+function cloneConfig(config: CorvusConfig): CorvusConfig {
+  return {
+    ...config,
+    permissions: {
+      ...config.permissions,
+      rules: { ...config.permissions.rules },
+    },
+    review: { ...config.review },
+  };
+}
+
+function maskSecret(value: string): string {
+  if (value.length <= 8) {
+    return "***";
+  }
+  return `${value.slice(0, 8)}...`;
 }

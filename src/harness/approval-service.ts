@@ -151,7 +151,7 @@ export class ApprovalService {
     })();
   }
 
-  private getApproval(id: string): ApprovalRow | undefined {
+  getApproval(id: string): ApprovalRow | undefined {
     const row = this.db.prepare(approvalSelectSql("where approvals.id = ?")).get(id);
     return row ? mapApprovalRow(row as ApprovalDbRow) : undefined;
   }
