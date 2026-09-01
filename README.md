@@ -26,7 +26,7 @@ It is built for engineers who need an agent to work across repositories without 
 The npm registry package is not published yet. Install the verified GitHub Release without cloning the repository:
 
 ```bash
-npm install --global https://github.com/RavenholmAlpha/CorvusAI/releases/download/v0.2.0/ravenholmalpha-corvus-0.2.0.tgz
+npm install --global https://github.com/RavenholmAlpha/CorvusAI/releases/download/v0.2.1/ravenholmalpha-corvus-0.2.1.tgz
 ```
 
 ```bash
@@ -34,7 +34,7 @@ corvus --version
 corvus
 ```
 
-Current release: [v0.2.0](https://github.com/RavenholmAlpha/CorvusAI/releases/tag/v0.2.0).
+Current release: [v0.2.1](https://github.com/RavenholmAlpha/CorvusAI/releases/tag/v0.2.1).
 
 > After `@ravenholmalpha/corvus` is published to npm, `npm install -g @ravenholmalpha/corvus` and `npx @ravenholmalpha/corvus` will also work.
 
