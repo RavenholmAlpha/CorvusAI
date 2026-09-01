@@ -2,7 +2,7 @@ import type { ChatCompletionRequest } from "./openai-client.js";
 import type { ChatCompletionResponse, ChatMessage, OpenAIToolSchema, ToolCall } from "./types.js";
 
 export type ProviderProtocol = "openai-chat" | "openai-responses" | "anthropic-messages";
-export interface ProviderConnection { endpoint: string; apiKey: string; model: string; temperature?: number; protocol?: ProviderProtocol; timeoutMs?: number; maxRetries?: number; }
+export interface ProviderConnection { endpoint: string; apiKey: string; model: string; temperature?: number; maxOutputTokens?: number; contextWindowTokens?: number; protocol?: ProviderProtocol; timeoutMs?: number; maxRetries?: number; }
 
 function url(endpoint: string, suffix: string): string { const base = endpoint.replace(/\/+$/, ""); return base.endsWith(suffix) ? base : base + suffix; }
 function responseTools(tools: OpenAIToolSchema[] = []): any[] { return tools.map((tool) => ({ type: "function", name: tool.function.name, description: tool.function.description, parameters: tool.function.parameters })); }
@@ -48,8 +48,8 @@ export class ProtocolChatClient {
     const endpoint = isResponses ? url(this.connection.endpoint, "/responses") : url(this.connection.endpoint, "/messages");
     const system = effectiveRequest.messages.filter((m) => m.role === "system").map((m) => m.content ?? "").join("\n");
     const body = isResponses
-      ? { model: this.connection.model, input: effectiveRequest.messages.map((m) => ({ role: m.role, content: m.content ?? "" })), tools: responseTools(effectiveRequest.tools), temperature: this.connection.temperature }
-      : { model: this.connection.model, system, messages: anthropicMessages(effectiveRequest.messages), tools: anthropicTools(effectiveRequest.tools), max_tokens: 4096, temperature: this.connection.temperature };
+      ? { model: this.connection.model, input: effectiveRequest.messages.map((m) => ({ role: m.role, content: m.content ?? "" })), tools: responseTools(effectiveRequest.tools), temperature: this.connection.temperature, max_output_tokens: this.connection.maxOutputTokens }
+      : { model: this.connection.model, system, messages: anthropicMessages(effectiveRequest.messages), tools: anthropicTools(effectiveRequest.tools), max_tokens: this.connection.maxOutputTokens ?? 4096, temperature: this.connection.temperature };
     const headers: Record<string,string> = { "content-type": "application/json" };
     if (isResponses) headers.authorization = "Bearer " + this.connection.apiKey; else { headers["x-api-key"] = this.connection.apiKey; headers["anthropic-version"] = "2023-06-01"; }
     const response = await this.fetchImpl(endpoint, { method: "POST", headers, body: JSON.stringify(body), signal });

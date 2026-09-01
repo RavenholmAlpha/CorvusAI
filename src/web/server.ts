@@ -18,7 +18,7 @@ import type { ChannelDeliveryManager } from "../channels.js";
 import { ProtocolChatClient, discoverProviderModels } from "../provider-client.js";
 import { validateConfig } from "../config-schema.js";
 import { mergePreservingSecrets, redactSecrets, resolveSecret } from "../secrets.js";
-import { BUNDLES, type BundleId } from "../bundles.js";
+import { applyPermissionPreset, BUNDLES, type BundleId, type PermissionPreset } from "../bundles.js";
 import type { BundleService } from "../bundle-service.js";
 import { normalizeWebhookMessage } from "../channel-events.js";
 import { ChannelInboundRegistry, SlackInboundAdapter, TelegramInboundAdapter } from "../channel-inbound.js";
@@ -48,7 +48,7 @@ export interface WebControlPlaneOptions {
   activeProjectId?: () => string;
   selectProject?: (projectId: string) => Promise<boolean>;
   dispatchProjectMessage?: (projectId: string, prompt: string, roleId?: string) => Promise<{ runId?: string; content: string; pendingApprovals?: number }>;
-  resolveApproval?: (approvalId: string, decision: "allow" | "deny") => Promise<void>;
+  resolveApproval?: (approvalId: string, decision: "allow" | "deny", scope: "once" | "always" | "never") => Promise<{ resumed: boolean; runId: string; sessionId: string | null }>;
   orchestrate?: (prompt: string) => Promise<unknown>;
   automationStates?: () => unknown[];
   cancelTask?: (taskId: string) => Promise<void>;
@@ -64,6 +64,7 @@ export interface WebControlPlaneOptions {
   bundles?: BundleService;
   indexMemory?: (memory: import("../harness/types.js").ProjectMemoryRow) => Promise<void>;
   dispatchSessionMessage?: (sessionId: string, prompt: string, roleId?: string) => Promise<unknown>;
+  switchSessionModel?: (sessionId: string, providerId: string, model: string) => Promise<unknown> | unknown;
   spawnSessionTask?: (sessionId: string, prompt: string, description?: string, roleId?: string) => Promise<unknown>;
 }
 
@@ -238,7 +239,7 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         const usage = usageEvents.reduce((total, event) => ({ promptTokens: total.promptTokens + Number(event.payload.promptTokens ?? 0), completionTokens: total.completionTokens + Number(event.payload.completionTokens ?? 0), requests: total.requests + 1 }), { promptTokens: 0, completionTokens: 0, requests: 0 });
         const masterSessions = options.runs.listMasterSessions();
         const masterSessionId = options.runs.getLatestMasterSession()?.id ?? null;
-        send(res, 200, { activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model }, plugins: options.plugins ?? [], mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })), usage, maxToolRounds: options.config.maxToolRounds, maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0, loopProtection: Boolean(options.config.loopProtection), browser: options.config.browser ?? {}, executionNodes: options.config.executionNodes ?? {}, deliveries: options.channelDeliveries?.list(50) ?? [], skills, timeline: options.events?.listRecent(50) ?? [], artifacts: options.evidence?.listRecent(50) ?? [], diagnostics: validateConfig(options.config), automations: options.config.automations ?? {}, automationStates: options.automationStates?.() ?? [], routingRules: options.config.routingRules ?? {}, channels: redactSecrets(options.config.channels ?? {}), activeProjectId, projects, providers: redactSecrets(options.config.providers ?? {}), roles: options.config.agentRoles ?? {}, mainProviderId: options.config.mainProviderId, tasks: options.runs.listSubagentTasks(), allSessions: options.runs.listSessions(), masterSessions, masterSessionId, approvals: options.approvals.listPending().map((approval) => ({ ...approval, toolCall: options.getToolCall?.(approval.toolCallId) })), sessions: active ? options.runs.listSessions(active.id) : [], memories: active ? options.runs.listProjectMemories(active.id, 100) : [], memoryLinks: active ? options.runs.listProjectMemoryLinks(active.id) : [] });
+        send(res, 200, { activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model }, plugins: options.plugins ?? [], mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })), usage, maxToolRounds: options.config.maxToolRounds, contextOverflowMode: options.config.contextOverflowMode, permissionPreset: options.config.installation?.permissionPreset ?? "balanced", maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0, loopProtection: Boolean(options.config.loopProtection), browser: options.config.browser ?? {}, executionNodes: options.config.executionNodes ?? {}, deliveries: options.channelDeliveries?.list(50) ?? [], skills, timeline: options.events?.listRecent(50) ?? [], artifacts: options.evidence?.listRecent(50) ?? [], diagnostics: validateConfig(options.config), automations: options.config.automations ?? {}, automationStates: options.automationStates?.() ?? [], routingRules: options.config.routingRules ?? {}, channels: redactSecrets(options.config.channels ?? {}), activeProjectId, projects, providers: redactSecrets(options.config.providers ?? {}), roles: options.config.agentRoles ?? {}, mainProviderId: options.config.mainProviderId, tasks: options.runs.listSubagentTasks(), allSessions: options.runs.listSessions(), masterSessions, masterSessionId, approvals: options.approvals.listPending().map((approval) => ({ ...approval, sessionId: options.runs.getRun(approval.runId)?.sessionId ?? null, toolCall: options.getToolCall?.(approval.toolCallId) })), sessions: active ? options.runs.listSessions(active.id) : [], memories: active ? options.runs.listProjectMemories(active.id, 100) : [], memoryLinks: active ? options.runs.listProjectMemoryLinks(active.id) : [] });
         return;
       }
       if (requestUrl.pathname === "/api/projects" && req.method === "POST") {
@@ -275,6 +276,23 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       if (sessionMatch && req.method === "POST") {
         const body = await readJson(req);
         send(res, 201, options.runs.createSession(sessionMatch[1], body.name ? String(body.name) : undefined));
+        return;
+      }
+      const sessionModel = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/model$/);
+      if (sessionModel && req.method === "POST") {
+        const sessionId = decodeURIComponent(sessionModel[1]);
+        if (!options.runs.getSession(sessionId)) { send(res, 404, { error: "Session not found" }); return; }
+        const body = await readJson(req);
+        const providerId = String(body.providerId ?? "").trim();
+        const model = String(body.model ?? "").trim();
+        if (!providerId && !model) { const session = options.runs.setSessionModel(sessionId, null, null, null); send(res, 200, session); return; }
+        if (!providerId || !model) { send(res, 400, { error: "providerId and model must both be set or both be empty" }); return; }
+        const provider = options.config.providers?.[providerId];
+        if (!provider) { send(res, 400, { error: "Provider not found: " + providerId }); return; }
+        if (!provider.models.includes(model) && !provider.modelSettings?.[model]) { send(res, 400, { error: "Model is not configured for provider" }); return; }
+        const result = await options.switchSessionModel?.(sessionId, providerId, model);
+        if (!options.switchSessionModel) { send(res, 503, { error: "Session model switching unavailable" }); return; }
+        send(res, 200, result);
         return;
       }
       const sessionExport = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/export$/);
@@ -457,9 +475,11 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         const approvalId = requestUrl.pathname.split("/")[3];
         const body = await readJson(req);
         const decision = body.decision === "deny" ? "deny" : "allow";
+        const requestedScope = String(body.scope ?? "once");
+        const scope = decision === "deny" ? (requestedScope === "never" ? "never" : "once") : (requestedScope === "always" ? "always" : "once");
         if (!options.resolveApproval) throw new Error("Approval control unavailable");
-        await options.resolveApproval(approvalId, decision);
-        send(res, 200, { ok: true });
+        const result = await options.resolveApproval(approvalId, decision, scope);
+        send(res, 200, { ok: true, ...result });
         return;
       }
 
@@ -491,7 +511,7 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         const body = await readJson(req);
         const id = String(body.id);
         if (!id) throw new Error("Provider id is required");
-        options.config.providers = { ...(options.config.providers ?? {}), [id]: { id, label: String(body.label ?? id), protocol: body.protocol as any ?? "openai-chat", endpoint: String(body.endpoint), apiKey: String(body.apiKey ?? options.config.providers?.[id]?.apiKey ?? ""), apiKeyRef: body.apiKeyRef ? String(body.apiKeyRef) : undefined, models: String(body.models ?? body.model ?? "").split(",").map((item) => item.trim()).filter(Boolean), defaultModel: String(body.defaultModel ?? body.model), temperature: Number(body.temperature ?? options.config.temperature), timeoutMs: body.timeoutMs ? Number(body.timeoutMs) : undefined, maxRetries: body.maxRetries === undefined ? undefined : Number(body.maxRetries), fallbackProviderIds: body.fallbackProviderIds ? String(body.fallbackProviderIds).split(",").map((item) => item.trim()).filter(Boolean) : undefined, capabilities: { tools: body.tools !== "false", streaming: body.streaming !== "false", vision: body.vision === "true" } } };
+        options.config.providers = { ...(options.config.providers ?? {}), [id]: { id, label: String(body.label ?? id), protocol: body.protocol as any ?? "openai-chat", endpoint: String(body.endpoint), apiKey: String(body.apiKey ?? options.config.providers?.[id]?.apiKey ?? ""), apiKeyRef: body.apiKeyRef ? String(body.apiKeyRef) : undefined, models: String(body.models ?? body.model ?? "").split(",").map((item) => item.trim()).filter(Boolean), defaultModel: String(body.defaultModel ?? body.model), temperature: Number(body.temperature ?? options.config.temperature), timeoutMs: body.timeoutMs ? Number(body.timeoutMs) : undefined, maxRetries: body.maxRetries === undefined ? undefined : Number(body.maxRetries), fallbackProviderIds: body.fallbackProviderIds ? String(body.fallbackProviderIds).split(",").map((item) => item.trim()).filter(Boolean) : undefined, modelSettings: body.modelSettings && typeof body.modelSettings === "object" ? body.modelSettings as any : options.config.providers?.[id]?.modelSettings, capabilities: { tools: body.tools !== "false", streaming: body.streaming !== "false", vision: body.vision === "true" } } };
         await options.saveConfig();
         send(res, 201, options.config.providers[id]);
         return;
@@ -547,6 +567,15 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         return;
       }
       if (requestUrl.pathname === "/api/config" && req.method === "GET") { send(res, 200, redactSecrets(options.config)); return; }
+      if (requestUrl.pathname === "/api/permissions/preset" && req.method === "POST") {
+        const body = await readJson(req);
+        const preset = String(body.preset) as PermissionPreset;
+        if (preset !== "balanced" && preset !== "autonomous") throw new Error("Permission preset must be balanced or autonomous");
+        applyPermissionPreset(options.config, preset);
+        await options.saveConfig();
+        send(res, 200, { ok: true, permissionPreset: preset });
+        return;
+      }
       if (requestUrl.pathname === "/api/config" && (req.method === "PUT" || req.method === "POST")) {
         const body = await readJson(req);
         const merged = mergePreservingSecrets(options.config, body);

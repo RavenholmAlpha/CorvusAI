@@ -141,6 +141,10 @@ function ToolResultItem({
   );
 }
 
+export function pendingApprovalsForSession<T extends { sessionId?: string | null }>(approvals: T[], sessionId: string): T[] {
+  return sessionId ? approvals.filter((approval) => approval.sessionId === sessionId) : [];
+}
+
 export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const project = state.projects.find((item) => item.id === state.activeProjectId);
   const connection = state.activeConnection;
@@ -163,6 +167,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const [sessionContext, setSessionContext] = useState<SessionContextInfo | null>(null);
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const [switchingModel, setSwitchingModel] = useState(false);
 
   // 3-Level hierarchy state
   const [sessionScope, setSessionScope] = useState<"master" | "projects">("master");
@@ -175,28 +180,22 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeEventSourceRef = useRef<EventSource | null>(null);
 
-  const handleAllowApproval = async (approvalId: string) => {
+  const handleApproval = async (approvalId: string, decision: "allow" | "deny", scope: "once" | "always" | "never" = "once") => {
     try {
-      await postJson(`/api/approvals/${approvalId}`, { decision: "allow" });
-      toast.success("Tool execution approved.");
-      await reload();
+      setStatus("running");
+      await postJson(`/api/approvals/${approvalId}`, { decision, scope });
+      toast[decision === "allow" ? "success" : "info"](decision === "allow" ? "Tool execution approved; conversation resumed." : "Tool execution denied; conversation continued.");
+      await Promise.all([reload(), loadMessages(), loadSessionContext()]);
+      setStatus("idle");
     } catch (e) {
-      toast.error("Failed to approve tool: " + String(e));
-    }
-  };
-
-  const handleRejectApproval = async (approvalId: string) => {
-    try {
-      await postJson(`/api/approvals/${approvalId}`, { decision: "deny" });
-      toast.info("Tool execution rejected.");
-      await reload();
-    } catch (e) {
-      toast.error("Failed to reject tool: " + String(e));
+      setStatus("failed");
+      toast.error("Failed to resolve approval: " + String(e));
     }
   };
 
   const allVisibleSessions = state.allSessions?.length ? state.allSessions : [...masterSessions, ...projectSessions];
   const selectedSession = allVisibleSessions.find((item) => item.id === selected);
+  const pendingApprovals = pendingApprovalsForSession(state.approvals, selected);
   const isMasterSession = Boolean(selectedSession && (selectedSession.projectId === null || sessionContext?.isMaster));
 
   // Check if current session was dispatched as a subagent task (Level 3)
@@ -333,6 +332,24 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
       const { scrollTop, scrollHeight, clientHeight } = messagesRef.current;
       const isAtBottom = scrollHeight - scrollTop - clientHeight < 50;
       setFollow(isAtBottom);
+    }
+  };
+
+  const handleModelSwitch = async (value: string) => {
+    if (!selected) return;
+    if (!value) { setSwitchingModel(true); try { await postJson(`/api/sessions/${selected}/model`, { providerId: "", model: "" }); await Promise.all([loadSessions(), reload()]); toast.success("Conversation now inherits the global model."); } catch (error) { toast.error("Failed to reset conversation model: " + String(error)); } finally { setSwitchingModel(false); } return; }
+    const separator = value.indexOf("::");
+    const providerId = value.slice(0, separator);
+    const model = value.slice(separator + 2);
+    setSwitchingModel(true);
+    try {
+      await postJson(`/api/sessions/${selected}/model`, { providerId, model });
+      toast.success(`Conversation switched to ${providerId} / ${model}.`);
+      await Promise.all([loadSessions(), reload()]);
+    } catch (error) {
+      toast.error("Failed to switch conversation model: " + String(error));
+    } finally {
+      setSwitchingModel(false);
     }
   };
 
@@ -780,6 +797,24 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+            {selectedSession && Object.keys(state.providers).length > 0 && (
+              <label className="conversation-model-selector" title="Provider and model for this conversation only">
+                <span>MODEL</span>
+                <select
+                  aria-label="Conversation provider and model"
+                  value={selectedSession.providerId && selectedSession.model ? `${selectedSession.providerId}::${selectedSession.model}` : ""}
+                  disabled={switchingModel || status === "running" || status === "submitting"}
+                  onChange={(event) => void handleModelSwitch(event.target.value)}
+                >
+                  <option value="">Global default ({connection.model})</option>
+                  {Object.values(state.providers).flatMap((provider) => provider.models.map((model) => (
+                    <option key={`${provider.id}::${model}`} value={`${provider.id}::${model}`}>
+                      {provider.label ?? provider.id} / {model}
+                    </option>
+                  )))}
+                </select>
+              </label>
+            )}
             {onToggleSidebar && (
               <button className="menu-toggle" onClick={onToggleSidebar} aria-label="Toggle Navigation Menu">
                 ☰
@@ -923,15 +958,15 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
         {/* Messages Transcript */}
         <div className="messages" ref={messagesRef} onScroll={handleScroll}>
           {/* Inline Pending Approvals Banner */}
-          {state.approvals.length > 0 && (
+          {pendingApprovals.length > 0 && (
             <div className="inline-approval-card">
               <div className="inline-approval-header">
                 <span className="inline-approval-title">
-                  🛡️ PENDING PERMISSION APPROVAL ({state.approvals.length})
+                  🛡️ PENDING PERMISSION APPROVAL ({pendingApprovals.length})
                 </span>
                 <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>High-risk tool call paused</span>
               </div>
-              {state.approvals.map((app) => (
+              {pendingApprovals.map((app) => (
                 <div key={app.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#150a0d", padding: "8px 10px", borderRadius: "3px" }}>
                   <div>
                     <b style={{ color: "#ff8080", fontSize: "12px", fontFamily: "var(--font-mono)" }}>
@@ -942,12 +977,10 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                     </pre>
                   </div>
                   <div className="inline-approval-actions">
-                    <button className="approval-btn allow" onClick={() => handleAllowApproval(app.id)}>
-                      ✓ APPROVE
-                    </button>
-                    <button className="approval-btn reject" onClick={() => handleRejectApproval(app.id)}>
-                      ✗ REJECT
-                    </button>
+                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "once")}>✓ ALLOW ONCE</button>
+                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "always")}>✓ ALWAYS ALLOW</button>
+                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "once")}>✗ DENY ONCE</button>
+                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "never")}>✗ NEVER ALLOW</button>
                   </div>
                 </div>
               ))}

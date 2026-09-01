@@ -85,6 +85,15 @@ function captureError(action: () => unknown): Error | undefined {
 }
 
 describe("durable harness stores", () => {
+  it("persists and resets a conversation model selection", async () => {
+    const { runs } = await createStores();
+    const project = runs.createProject("Model Project", process.cwd());
+    const session = runs.createSession(project.id, "Model chat");
+    expect(runs.setSessionModel(session.id, "provider-a", "small-model", 200000)).toMatchObject({ providerId: "provider-a", model: "small-model", contextWindowTokens: 200000 });
+    expect(runs.getSession(session.id)).toMatchObject({ providerId: "provider-a", model: "small-model", contextWindowTokens: 200000 });
+    expect(runs.setSessionModel(session.id, null, null, null)).toMatchObject({ providerId: null, model: null, contextWindowTokens: null });
+  });
+
   it("exports store classes from the package entry point", () => {
     expect(ExportedEventLog).toBe(EventLog);
     expect(ExportedRunStore).toBe(RunStore);

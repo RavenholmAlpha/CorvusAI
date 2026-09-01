@@ -25,6 +25,9 @@ export interface Project {
 export interface Session {
   id: string;
   projectId: string | null;
+  providerId: string | null;
+  model: string | null;
+  contextWindowTokens: number | null;
   name: string | null;
   preview: string | null;
   messageCount: number;
@@ -40,6 +43,7 @@ export interface Provider {
   defaultModel?: string;
   models: string[];
   temperature?: number;
+  modelSettings?: Record<string, { contextWindowTokens?: number; maxOutputTokens?: number; temperature?: number }>;
 }
 
 export interface Role {
@@ -85,6 +89,7 @@ export interface AgentHierarchyNode {
 export interface Approval {
   id: string;
   runId: string;
+  sessionId?: string | null;
   toolCallId: string;
   toolName: string | null;
   status: string;
@@ -182,6 +187,8 @@ export interface WebState {
     requests: number;
   };
   maxToolRounds?: number;
+  contextOverflowMode?: "compact-with-previous-model" | "sliding-window";
+  permissionPreset?: "safe" | "balanced" | "autonomous" | "custom";
   maxConsecutiveIdenticalToolCalls?: number;
   loopProtection?: boolean;
   browser: { cdpEndpoint?: string };

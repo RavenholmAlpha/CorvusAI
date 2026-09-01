@@ -110,6 +110,15 @@ function ensureCompatibilityColumns(db: CorvusDatabase, createdAt: string): void
     if (!tableHasColumn(db, "sessions", "parent_session_id")) {
       db.exec("alter table sessions add column parent_session_id text references sessions(id) on delete set null");
     }
+    if (!tableHasColumn(db, "sessions", "provider_id")) {
+      db.exec("alter table sessions add column provider_id text");
+    }
+    if (!tableHasColumn(db, "sessions", "model")) {
+      db.exec("alter table sessions add column model text");
+    }
+    if (!tableHasColumn(db, "sessions", "context_window_tokens")) {
+      db.exec("alter table sessions add column context_window_tokens integer");
+    }
     if (!tableHasColumn(db, "sessions", "preview")) {
       db.exec("alter table sessions add column preview text");
     }

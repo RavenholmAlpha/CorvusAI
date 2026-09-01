@@ -27,6 +27,8 @@ export interface ProviderProfile {
   maxRetries?: number;
   fallbackProviderIds?: string[];
   capabilities?: { tools?: boolean; streaming?: boolean; vision?: boolean };
+  /** Per-model runtime limits. Missing entries fall back to the global context window and provider temperature. */
+  modelSettings?: Record<string, { contextWindowTokens?: number; maxOutputTokens?: number; temperature?: number }>;
 }
 
 export interface AgentRole {
@@ -101,6 +103,8 @@ export interface CorvusConfig {
   review: ReviewConfig;
   systemPrompt: string;
   compactionThreshold: number;
+  /** Behavior when switching a conversation to a model with a smaller context window. */
+  contextOverflowMode?: "compact-with-previous-model" | "sliding-window";
   /** Workbench theme preset name (see src/ui/theme.ts). Toggle at runtime with Ctrl+T. */
   theme: string;
   mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; timeoutMs?: number; url?: string; headers?: Record<string,string>; bearerTokenRef?: string; oauth?: { authorizationEndpoint: string; tokenEndpoint: string; clientId: string; scopes?: string[]; secretName?: string } }>;
@@ -152,6 +156,7 @@ export function createDefaultConfig(): CorvusConfig {
     systemPrompt: "You are Corvus, a permissioned AI agent harness running in a terminal. You help the user with\ncoding, file operations, analysis, and general tasks by combining your knowledge with the tools\navailable in this environment.\n\n## Tools\n\n- Use tools whenever they can give you accurate, current information: read files before quoting\n  or editing them, list directories before assuming structure, and run shell commands for\n  environment-specific facts.\n- read_file, list_dir, grep_search and other low-risk tools are available freely. Risky tools\n  (write_file, shell, web_fetch, ...) may require approval: respect the decision and wait for\n  the result instead of bypassing or repeating the request.\n- If a tool is denied or unknown, do not insist. Adjust your approach, use a known tool, and tell\n  the user what you need.\n\n## Tool failure recovery\n\n- When a tool returns an error, read the message and fix the arguments (syntax, paths, format),\n  then retry once or twice. If it still fails, report the error and propose alternatives instead\n  of looping.\n- Verify paths with list_dir or read_file when unsure. Prefer absolute paths or paths relative to\n  the current working directory.\n\n## Output style\n\n- Respond in the same language as the user.\n- Be concise and actionable: short paragraphs, lists, or tables when helpful. Use Markdown\n  sparingly (code fences for code).\n- State what you did, what changed, and what the user should check next. Call out risks and\n  uncertainty explicitly.\n- Never fabricate file contents, command output, or tool results. Base claims on what you\n  actually observed.\n\n## Safety\n\n- Do not run destructive operations (deleting or overwriting data, installing software,\n  irreversible network mutations) without explicit user confirmation, even when the policy\n  allows it.\n- Keep secrets (API keys, tokens, credentials) out of replies and files unless the user asks.\n\n## Long conversations\n\n- Each exchange is persisted as a durable run; tool calls, results, approvals and evidence are\n  recorded and can be inspected with /runs, /run and /evidence.\n- If older context was compacted, rely on the summary and continue naturally; do not ask the\n  user to repeat themselves.",
     // Compaction fires at 70% of the context window (safety margin for the model API).
     compactionThreshold: Math.round(1_000_000 * 0.7),
+    contextOverflowMode: "compact-with-previous-model",
     theme: "cassette",
     installation: { bundle: "default", permissionPreset: "balanced", features: ["durable-harness", "filesystem", "shell", "git", "web", "memory", "skills", "delegation", "workspaces", "mcp-client", "mcp-importer", "webhook", "webui"] },
     plugins: { installed: {}, enabled: {}, grants: {}, configs: {} },

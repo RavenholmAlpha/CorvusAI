@@ -158,6 +158,7 @@ function ProviderModal({
     timeoutMs: initialProvider?.timeoutMs ?? 60000,
     maxRetries: initialProvider?.maxRetries ?? 2,
     fallbackProviderIds: Array.isArray(initialProvider?.fallbackProviderIds) ? initialProvider.fallbackProviderIds.join(", ") : "",
+    modelSettings: initialProvider?.modelSettings ?? {},
   });
 
   const [discovering, setDiscovering] = useState(false);
@@ -305,6 +306,7 @@ function ProviderModal({
         temperature: Number(formData.temperature) || 0.7,
         timeoutMs: Number(formData.timeoutMs) || 60000,
         maxRetries: Number(formData.maxRetries) || 2,
+        modelSettings: formData.modelSettings,
       };
       if (formData.apiKey) payload.apiKey = formData.apiKey;
       if (formData.apiKeyRef) payload.apiKeyRef = formData.apiKeyRef;
@@ -535,6 +537,26 @@ function ProviderModal({
           />
         </label>
 
+        <details style={{ marginTop: "12px", border: "1px dashed var(--border-dark)", borderRadius: "4px", padding: "8px" }}>
+          <summary style={{ cursor: "pointer", color: "var(--vfd-cyan)", fontSize: "11px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>
+            MODEL PARAMETERS (CONTEXT, OUTPUT, TEMPERATURE)
+          </summary>
+          <p style={{ fontSize: "11px", color: "var(--text-muted)" }}>Blank values inherit provider/global defaults. Runtime resolves these values for the selected model.</p>
+          {currentModelsList.map((model: string) => {
+            const settings = formData.modelSettings[model] ?? {};
+            const setSetting = (key: "contextWindowTokens" | "maxOutputTokens" | "temperature", raw: string) => {
+              const value = raw === "" ? undefined : Number(raw);
+              setFormData((previous) => ({ ...previous, modelSettings: { ...previous.modelSettings, [model]: { ...(previous.modelSettings[model] ?? {}), [key]: value } } }));
+            };
+            return <div key={model} style={{ display: "grid", gridTemplateColumns: "minmax(160px, 2fr) repeat(3, minmax(100px, 1fr))", gap: "8px", alignItems: "end", marginTop: "8px" }}>
+              <code style={{ paddingBottom: "8px" }}>{model}</code>
+              <label>Context window<input aria-label={model + " context window"} type="number" min="1024" value={settings.contextWindowTokens ?? ""} placeholder="global" onChange={(event) => setSetting("contextWindowTokens", event.target.value)} /></label>
+              <label>Max output<input aria-label={model + " max output"} type="number" min="1" value={settings.maxOutputTokens ?? ""} placeholder="provider" onChange={(event) => setSetting("maxOutputTokens", event.target.value)} /></label>
+              <label>Temperature<input aria-label={model + " temperature"} type="number" min="0" max="2" step="0.1" value={settings.temperature ?? ""} placeholder="provider" onChange={(event) => setSetting("temperature", event.target.value)} /></label>
+            </div>;
+          })}
+        </details>
+
         {/* Collapsible Advanced Settings */}
         <details style={{ marginTop: "12px", border: "1px dashed var(--border-dark)", borderRadius: "4px", padding: "8px" }}>
           <summary style={{ cursor: "pointer", color: "var(--amber)", fontSize: "11px", fontWeight: 700, fontFamily: "var(--font-mono)" }}>
@@ -600,6 +622,20 @@ export function SettingsPage({ state, reload }: PageProps) {
   const [roleOpen, setRoleOpen] = useState(false);
   const [rawOpen, setRawOpen] = useState(false);
   const [raw, setRaw] = useState("");
+  const [permissionBusy, setPermissionBusy] = useState(false);
+
+  const setPermissionMode = async (preset: "balanced" | "autonomous") => {
+    setPermissionBusy(true);
+    try {
+      await postJson("/api/permissions/preset", { preset });
+      await reload();
+      toast.success(preset === "autonomous" ? "YOLO / autonomous mode enabled." : "Ask mode enabled.");
+    } catch (error) {
+      toast.error("Failed to update permission mode: " + String(error));
+    } finally {
+      setPermissionBusy(false);
+    }
+  };
 
   useEffect(() => {
     if (rawOpen) {
@@ -657,6 +693,20 @@ export function SettingsPage({ state, reload }: PageProps) {
   return (
     <>
       <div className="grid">
+        <Card title="Permission Mode">
+          <p style={{ color: "var(--text-muted)", marginTop: 0 }}>Choose whether risky tools pause for inline approval or run autonomously.</p>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "10px" }}>
+            <button className={state.permissionPreset !== "autonomous" ? "primary" : ""} disabled={permissionBusy} onClick={() => void setPermissionMode("balanced")}>
+              ASK {state.permissionPreset !== "autonomous" ? "✓" : ""}
+              <small style={{ display: "block" }}>Pause risky tools for approval</small>
+            </button>
+            <button className={state.permissionPreset === "autonomous" ? "primary" : "danger"} disabled={permissionBusy} onClick={() => void setPermissionMode("autonomous")}>
+              YOLO / AUTONOMOUS {state.permissionPreset === "autonomous" ? "✓" : ""}
+              <small style={{ display: "block" }}>Allow all tool capabilities</small>
+            </button>
+          </div>
+        </Card>
+
         <Card
           title="AI Providers"
           action={
@@ -742,6 +792,17 @@ export function SettingsPage({ state, reload }: PageProps) {
               ✓ ALL SYSTEMS OPERATIONAL (0 DIAGNOSTIC ERRORS)
             </p>
           )}
+        </Card>
+
+        <Card title="Context Overflow">
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: 0 }}>When switching to a smaller model, compact with the previous model when possible or immediately retain a sliding window.</p>
+          <form onSubmit={async (event) => { event.preventDefault(); const data = new FormData(event.currentTarget); try { await postJson("/api/config", { contextOverflowMode: data.get("contextOverflowMode") }); await reload(); toast.success("Context overflow behavior updated."); } catch (error) { toast.error("Failed to update overflow behavior: " + String(error)); } }}>
+            <select name="contextOverflowMode" defaultValue={state.contextOverflowMode ?? "compact-with-previous-model"} style={{ width: "100%", marginBottom: "8px" }}>
+              <option value="compact-with-previous-model">Compact with previous model (fallback to sliding window)</option>
+              <option value="sliding-window">Sliding window only</option>
+            </select>
+            <button type="submit" className="primary">SAVE OVERFLOW MODE</button>
+          </form>
         </Card>
 
         <Card title="Execution & Tool Loop Guard">

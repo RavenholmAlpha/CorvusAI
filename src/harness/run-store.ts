@@ -135,6 +135,9 @@ interface SessionDbRow {
   agent_id: string | null;
   kind: SessionRow["kind"];
   parent_session_id: string | null;
+  provider_id: string | null;
+  model: string | null;
+  context_window_tokens: number | null;
   name: string | null;
   preview: string | null;
   message_count: number;
@@ -164,6 +167,9 @@ function mapSessionRow(row: SessionDbRow): SessionRow {
     agentId: row.agent_id,
     kind: row.kind,
     parentSessionId: row.parent_session_id,
+    providerId: row.provider_id ?? null,
+    model: row.model ?? null,
+    contextWindowTokens: row.context_window_tokens ?? null,
     name: row.name,
     preview: row.preview,
     messageCount: row.message_count,
@@ -310,8 +316,14 @@ export class RunStore {
     return this.listSessions().find((session) => session.id === sessionId);
   }
 
+  getSession(sessionId: string): SessionRow | undefined {
+    const row = this.db.prepare("select id, project_id, agent_id, kind, parent_session_id, provider_id, model, context_window_tokens, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at from sessions where id = ?").get(sessionId);
+    return row ? mapSessionRow(row as SessionDbRow) : undefined;
+  }
+
   listArchivedSessions(projectId?: string | null): SessionRow[] {
-    const sql = projectId === undefined ? "select id, project_id, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at from sessions where archived_at is not null order by archived_at desc" : "select id, project_id, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at from sessions where project_id is ? and archived_at is not null order by archived_at desc";
+    const columns = "id, project_id, agent_id, kind, parent_session_id, provider_id, model, context_window_tokens, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at";
+    const sql = projectId === undefined ? `select ${columns} from sessions where archived_at is not null order by archived_at desc` : `select ${columns} from sessions where project_id is ? and archived_at is not null order by archived_at desc`;
     const rows = projectId === undefined ? this.db.prepare(sql).all() : this.db.prepare(sql).all(projectId);
     return rows.map((row) => mapSessionRow(row as SessionDbRow));
   }
@@ -337,15 +349,20 @@ export class RunStore {
   createSession(projectId: string | null, name?: string, identity: { agentId?: string | null; kind?: SessionRow["kind"]; parentSessionId?: string | null } = {}): SessionRow {
     const timestamp = nowIso();
     const session: SessionRow = {
-      id: newId("sess"), projectId, agentId: identity.agentId ?? (projectId ? this.ensureProjectAgent(projectId).id : this.ensureMasterAgent().id), kind: identity.kind ?? (projectId === null ? "master" : "project_main"), parentSessionId: identity.parentSessionId ?? null, name: name ?? null, preview: null, messageCount: 0, totalTokens: 0,
+      id: newId("sess"), projectId, agentId: identity.agentId ?? (projectId ? this.ensureProjectAgent(projectId).id : this.ensureMasterAgent().id), kind: identity.kind ?? (projectId === null ? "master" : "project_main"), parentSessionId: identity.parentSessionId ?? null, providerId: null, model: null, contextWindowTokens: null, name: name ?? null, preview: null, messageCount: 0, totalTokens: 0,
       createdAt: timestamp, lastActiveAt: timestamp, archivedAt: null,
     };
-    this.db.prepare("insert into sessions (id, project_id, agent_id, kind, parent_session_id, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(session.id, session.projectId, session.agentId, session.kind, session.parentSessionId, session.name, session.preview, session.messageCount, session.totalTokens, session.createdAt, session.lastActiveAt, null);
+    this.db.prepare("insert into sessions (id, project_id, agent_id, kind, parent_session_id, provider_id, model, context_window_tokens, name, preview, message_count, total_tokens, created_at, last_active_at, archived_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(session.id, session.projectId, session.agentId, session.kind, session.parentSessionId, session.providerId, session.model, session.contextWindowTokens, session.name, session.preview, session.messageCount, session.totalTokens, session.createdAt, session.lastActiveAt, null);
     if (projectId) {
       this.db.prepare("update projects set last_session_id = ?, updated_at = ? where id = ?").run(session.id, timestamp, projectId);
     }
     return session;
+  }
+
+  setSessionModel(sessionId: string, providerId: string | null, model: string | null, contextWindowTokens: number | null): SessionRow | undefined {
+    this.db.prepare("update sessions set provider_id = ?, model = ?, context_window_tokens = ?, last_active_at = ? where id = ?").run(providerId, model, contextWindowTokens, nowIso(), sessionId);
+    return this.getSession(sessionId);
   }
 
   touchSession(sessionId: string): void {
@@ -354,11 +371,11 @@ export class RunStore {
 
   listSessions(projectId?: string | null): SessionRow[] {
     const query = projectId === undefined
-      ? `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.name, s.archived_at,
+      ? `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.provider_id, s.model, s.context_window_tokens, s.name, s.archived_at,
            coalesce((select m.content from messages m join runs r on r.id = m.run_id where r.session_id = s.id and m.role = 'user' order by m.created_at desc limit 1), s.preview) as preview,
            (select count(*) from messages m join runs r on r.id = m.run_id where r.session_id = s.id) as message_count,
            s.total_tokens, s.created_at, s.last_active_at from sessions s where s.archived_at is null order by s.last_active_at desc, s.id`
-      : `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.name,
+      : `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.provider_id, s.model, s.context_window_tokens, s.name,
            coalesce((select m.content from messages m join runs r on r.id = m.run_id where r.session_id = s.id and m.role = 'user' order by m.created_at desc limit 1), s.preview) as preview,
            (select count(*) from messages m join runs r on r.id = m.run_id where r.session_id = s.id) as message_count,
            s.total_tokens, s.created_at, s.last_active_at from sessions s where s.project_id is ? and s.archived_at is null order by s.last_active_at desc, s.id`;
@@ -369,11 +386,11 @@ export class RunStore {
 
   getLatestSession(projectId?: string | null): SessionRow | undefined {
     const query = projectId === undefined
-      ? `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.name,
+      ? `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.provider_id, s.model, s.context_window_tokens, s.name,
            coalesce((select m.content from messages m join runs r on r.id = m.run_id where r.session_id = s.id and m.role = 'user' order by m.created_at desc limit 1), s.preview) as preview,
            (select count(*) from messages m join runs r on r.id = m.run_id where r.session_id = s.id) as message_count,
            s.total_tokens, s.created_at, s.last_active_at from sessions s order by s.last_active_at desc limit 1`
-      : `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.name,
+      : `select s.id, s.project_id, s.agent_id, s.kind, s.parent_session_id, s.provider_id, s.model, s.context_window_tokens, s.name,
            coalesce((select m.content from messages m join runs r on r.id = m.run_id where r.session_id = s.id and m.role = 'user' order by m.created_at desc limit 1), s.preview) as preview,
            (select count(*) from messages m join runs r on r.id = m.run_id where r.session_id = s.id) as message_count,
            s.total_tokens, s.created_at, s.last_active_at from sessions s where s.project_id is ? order by s.last_active_at desc limit 1`;

@@ -27,7 +27,7 @@ import { McpRuntimeManager } from "./mcp/loader.js";
 import { discoverMcpConfigs, mergeDiscoveredMcpServers } from "./mcp/importer.js";
 import { serveCorvusMcp } from "./mcp/server.js";
 import { acquireOAuthToken } from "./mcp/oauth.js";
-import { createConfigBackedChatModel, createProfileBackedChatModel } from "./runtime.js";
+import { createConfigBackedChatModel, createProfileBackedChatModel, createSessionChatModel, resolveModelSettings } from "./runtime.js";
 import { CorvusTui } from "./tui.js";
 import { createBuiltInTools, ToolRegistry } from "./tools/index.js";
 import { setMcpManager, setMemorySearcher, setRoleManager, setProjectMemoryRecorder, setProjectTaskDispatcher, setScopeLeaseCoordinator, setSkillManager, setSubagentTaskChecker, setSubAgentBatchFactory, setSubAgentFactory, setWorkspaceLister, setWorkspaceRegistrar, setWorkspaceSummaryGetter, setWorkspaceUnregistrar } from "./tools/builtin.js";
@@ -45,6 +45,7 @@ import { curateHandoff } from "./memory-curator.js";
 import { MemoryEngine } from "./memory-engine.js";
 import { HashEmbeddingProvider } from "./embeddings.js";
 import { SubagentManager } from "./subagents.js";
+import { routeProjectRequest } from "./project-request-router.js";
 
 const execFileAsync = promisify(execFile);
 import { setSandboxConfig } from "./sandbox-enforce.js";
@@ -351,6 +352,34 @@ ${Object.values(config.agentRoles ?? {}).map((role) => `   - ${role.id}${role.la
     });
     masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(masterSession.id)), masterSession.id);
 
+    const sessionRuntimes = new Map<string, { agent: CorvusAgent; runner: HarnessRunner }>();
+    const createSessionRuntime = (sessionId: string, providerId: string, modelName: string) => {
+      const target = runs.getSession(sessionId);
+      if (!target) throw new Error("Session not found: " + sessionId);
+      const settings = resolveModelSettings(config, config.providers?.[providerId], modelName);
+      const provider = config.providers?.[providerId];
+      if (!provider) throw new Error("Provider not found: " + providerId);
+      if (!provider.models.includes(modelName) && !provider.modelSettings?.[modelName]) throw new Error("Model is not configured for provider: " + modelName);
+      const sessionConfig = { ...config, endpoint: provider.endpoint, model: modelName, contextWindowTokens: settings.contextWindowTokens, compactionThreshold: Math.min(config.compactionThreshold, Math.floor(settings.contextWindowTokens * 0.7)) };
+      const sessionModel = createSessionChatModel(config, providerId, modelName);
+      const sessionRunner = new HarnessRunner({ config: sessionConfig, model: sessionModel, tools, runs, queue, evidence, events, approvals });
+      const sessionHarness = createCliHarnessAdapter(runs, evidence, approvals, queue, sessionRunner, subagents);
+      const workspace = target.projectId ? runs.getProject(target.projectId)?.path ?? process.cwd() : process.cwd();
+      const sessionAgent = new CorvusAgent({ config: sessionConfig, tools, model: sessionModel, runner: sessionRunner, harness: sessionHarness, augmentPrompt: skillAugment(workspace), ...checkpointHooks });
+      sessionAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
+      const runtime = { agent: sessionAgent, runner: sessionRunner };
+      sessionRuntimes.set(sessionId, runtime);
+      return runtime;
+    };
+    const runtimeForSession = (target: import("./harness/types.js").SessionRow) => target.providerId && target.model
+      ? sessionRuntimes.get(target.id) ?? createSessionRuntime(target.id, target.providerId, target.model)
+      : target.projectId === null ? { agent: masterAgent, runner: masterRunner } : getProjectAgent(target.projectId);
+
+    const resolveProjectRequest = (prompt: string) => {
+      const decision = routeProjectRequest(prompt, runs.listProjects());
+      return decision.kind === "project" ? { project: decision.project } : decision.kind === "clarify" ? { ambiguous: decision.candidates } : undefined;
+    };
+
     const runtimeForRun = (runId: string) => {
       const run = runs.getRun(runId);
       const sessionRow = run?.sessionId ? runs.listSessions().find((item) => item.id === run.sessionId) : undefined;
@@ -620,10 +649,31 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
           }
           return runtime.agent.contextUsage();
         },
+        switchSessionModel: (sessionId, providerId, modelName) => {
+          const settings = resolveModelSettings(config, config.providers?.[providerId], modelName);
+          createSessionRuntime(sessionId, providerId, modelName);
+          const updated = runs.setSessionModel(sessionId, providerId, modelName, settings.contextWindowTokens);
+          if (!updated) throw new Error("Session not found: " + sessionId);
+          return updated;
+        },
         sendSessionMessage: async (sessionId, prompt, onChunk, signal) => {
-          const target = runs.listSessions().find((item) => item.id === sessionId);
+          const target = runs.getSession(sessionId);
           if (!target) throw new Error("Session not found: " + sessionId);
+          if (target.providerId && target.model) {
+            const selectedRuntime = runtimeForSession(target);
+            selectedRuntime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
+            const result = await selectedRuntime.agent.send(prompt, { onChunk, signal });
+            return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
+          }
           if (target.projectId === null) {
+            const routed = resolveProjectRequest(prompt);
+            if (routed?.ambiguous) return { content: "Multiple registered projects match this request: " + routed.ambiguous.map((item) => item.name + " (" + item.id + ")").join(", ") + ". Please name one project explicitly.", pendingApprovals: 0 };
+            if (routed?.project) {
+              const runtime = getProjectAgent(routed.project.id);
+              runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(runtime.sessionId)), runtime.sessionId);
+              const result = await runtime.agent.send(prompt, { onChunk, signal });
+              return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0, routedProjectId: routed.project.id, routedSessionId: runtime.sessionId };
+            }
             masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
             const result = await masterAgent.send(prompt, { onChunk, signal });
             return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
@@ -633,15 +683,18 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
           const result = await runtime.agent.send(prompt, { onChunk, signal });
           return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
         },
-        resolveApproval: async (approvalId, decision) => {
+        resolveApproval: async (approvalId, decision, scope) => {
           const approval = approvals.getApproval(approvalId);
           if (!approval) throw new Error("Approval not found: " + approvalId);
-          approvals.resolveApproval(approvalId, decision === "allow" ? "approved" : "denied", "once");
+          approvals.resolveApproval(approvalId, decision === "allow" ? "approved" : "denied", scope);
+          if (scope !== "once") await saveConfig(config);
           if (decision === "allow") {
             const tool = tools.list().find((candidate) => candidate.name === approval.toolName);
             if (tool) await queue.runApproved(approval.toolCallId, tool);
           }
-          await runtimeForRun(approval.runId).runner.resumeRun(approval.runId);
+          const remaining = approvals.listPending(approval.runId);
+          if (remaining.length === 0) await runtimeForRun(approval.runId).runner.resumeRun(approval.runId);
+          return { resumed: remaining.length === 0, runId: approval.runId, sessionId: runs.getRun(approval.runId)?.sessionId ?? null };
         },
       });
       process.stdout.write("Corvus WebUI available at " + webControl.accessUrl + "\n");

@@ -68,6 +68,9 @@ export interface SessionRow {
   agentId: string | null;
   kind: "master" | "project_main" | "worker";
   parentSessionId: string | null;
+  providerId: string | null;
+  model: string | null;
+  contextWindowTokens: number | null;
   name: string | null;
   preview: string | null;
   messageCount: number;

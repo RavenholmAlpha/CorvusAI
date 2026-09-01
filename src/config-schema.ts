@@ -6,6 +6,7 @@ const PROTOCOLS = new Set<ProviderProtocol>(["openai-chat", "openai-responses", 
 
 export function migrateConfig(input: Record<string, unknown>): Record<string, unknown> {
   const migrated = { ...input };
+  if (migrated.contextOverflowMode === "compact-with-previous") migrated.contextOverflowMode = "compact-with-previous-model";
   const version = typeof migrated.schemaVersion === "number" ? migrated.schemaVersion : 1;
   if (version < 2) {
     migrated.schemaVersion = 2;
@@ -22,12 +23,18 @@ export function validateConfig(config: CorvusConfig): ConfigDiagnostic[] {
   if (!config.model) diagnostics.push({ level: "error", path: "model", message: "Legacy/default model is required" });
   if (!/^https?:\/\//.test(config.endpoint)) diagnostics.push({ level: "error", path: "endpoint", message: "Endpoint must be HTTP(S)" });
   if (config.contextWindowTokens < 8000) diagnostics.push({ level: "error", path: "contextWindowTokens", message: "Context window must be at least 8000" });
+  if (config.contextOverflowMode && !["compact-with-previous-model", "sliding-window"].includes(config.contextOverflowMode)) diagnostics.push({ level: "error", path: "contextOverflowMode", message: "Unsupported context overflow mode" });
   for (const [id, provider] of Object.entries(config.providers ?? {})) {
     if (provider.id !== id) diagnostics.push({ level: "warning", path: "providers." + id + ".id", message: "Provider ID normalized to map key" });
     if (!PROTOCOLS.has(provider.protocol)) diagnostics.push({ level: "error", path: "providers." + id + ".protocol", message: "Unsupported provider protocol" });
     if (!/^https?:\/\//.test(provider.endpoint)) diagnostics.push({ level: "error", path: "providers." + id + ".endpoint", message: "Endpoint must be HTTP(S)" });
     if (!provider.defaultModel && provider.models.length === 0) diagnostics.push({ level: "error", path: "providers." + id + ".models", message: "At least one model is required" });
     if (!provider.apiKey) diagnostics.push({ level: "warning", path: "providers." + id + ".apiKey", message: "No provider API key; legacy key fallback may be used" });
+    for (const [model, settings] of Object.entries(provider.modelSettings ?? {})) {
+      if (settings.contextWindowTokens !== undefined && settings.contextWindowTokens < 1024) diagnostics.push({ level: "error", path: "providers." + id + ".modelSettings." + model + ".contextWindowTokens", message: "Model context window must be at least 1024" });
+      if (settings.maxOutputTokens !== undefined && settings.maxOutputTokens < 1) diagnostics.push({ level: "error", path: "providers." + id + ".modelSettings." + model + ".maxOutputTokens", message: "Model max output tokens must be positive" });
+      if (settings.temperature !== undefined && (settings.temperature < 0 || settings.temperature > 2)) diagnostics.push({ level: "error", path: "providers." + id + ".modelSettings." + model + ".temperature", message: "Model temperature must be between 0 and 2" });
+    }
   }
   for (const [id, server] of Object.entries(config.mcpServers ?? {})) {
     if (!server.command && !server.url) diagnostics.push({ level: "error", path: "mcpServers." + id, message: "MCP server requires command or URL" });

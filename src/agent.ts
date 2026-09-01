@@ -5,6 +5,7 @@ import type { ToolRegistry } from "./tools/index.js";
 import type { ChatCompletionResponse, ChatMessage, ToolCall } from "./types.js";
 import type { DurableHarnessAdapter } from "./commands.js";
 import { buildSystemPrompt } from "./system-prompt.js";
+import { resolveMainModel } from "./runtime.js";
 import {
   buildCompactionPrompt,
   buildSummaryMessage,
@@ -111,6 +112,11 @@ export class CorvusAgent {
     this.lastRunId = undefined;
   }
 
+  private contextLimits(): { contextWindow: number; threshold: number } {
+    const contextWindow = resolveMainModel(this.options.config).settings.contextWindowTokens;
+    return { contextWindow, threshold: Math.min(this.options.config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD, Math.round(contextWindow * 0.7)) };
+  }
+
   /** Current context usage statistics (for the status bar / inspector). */
   contextUsage(): ContextUsage {
     const summary = this.messages.find(isSummaryMessage);
@@ -129,8 +135,8 @@ export class CorvusAgent {
       lastRequestBreakdown: this.options.runner
         ? this.options.runner.lastRequestBreakdown
         : this.lastDirectRequestBreakdown,
-      threshold: this.options.config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD,
-      contextWindow: this.options.config.contextWindowTokens ?? 1_000_000,
+      threshold: this.contextLimits().threshold,
+      contextWindow: this.contextLimits().contextWindow,
       hasSummary: Boolean(summary),
       summaryTokens: summary ? estimateTokens([summary]) : 0,
       isCompacting: this.isCompacting,
@@ -310,7 +316,7 @@ export class CorvusAgent {
     }
 
     const estTokens = estimateTokens(this.messages);
-    const threshold = this.options.config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
+    const threshold = this.contextLimits().threshold;
 
     if (estTokens > threshold) {
       this.startAsyncCompaction(true);
@@ -328,7 +334,7 @@ export class CorvusAgent {
     if (this.isCompacting || this.messages.length <= 5) {
       return;
     }
-    const threshold = this.options.config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
+    const threshold = this.contextLimits().threshold;
     if (estimateTokens(this.messages) > threshold) {
       this.startAsyncCompaction(false);
     }
@@ -339,7 +345,7 @@ export class CorvusAgent {
    * non-summary messages if the window still exceeds twice the budget.
    */
   private cascadeEvict(): void {
-    const threshold = this.options.config.compactionThreshold ?? DEFAULT_COMPACTION_THRESHOLD;
+    const threshold = this.contextLimits().threshold;
     if (estimateTokens(this.messages) <= threshold * 2) {
       return;
     }

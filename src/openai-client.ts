@@ -13,6 +13,7 @@ export interface OpenAIChatClientOptions {
   apiKey?: string;
   model: string;
   temperature?: number;
+  maxOutputTokens?: number;
   fetch?: typeof fetch;
   maxRetries?: number;
 }
@@ -142,6 +143,7 @@ export class OpenAIChatClient {
   private readonly apiKey?: string;
   private readonly model: string;
   private readonly temperature?: number;
+  private readonly maxOutputTokens?: number;
   private readonly fetchImpl: typeof fetch;
   private readonly maxRetries: number;
 
@@ -150,6 +152,7 @@ export class OpenAIChatClient {
     this.apiKey = options.apiKey;
     this.model = options.model;
     this.temperature = options.temperature;
+    this.maxOutputTokens = options.maxOutputTokens;
     this.fetchImpl = options.fetch ?? fetch;
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   }
@@ -212,6 +215,7 @@ export class OpenAIChatClient {
         tools: request.tools,
         tool_choice: request.tool_choice,
         temperature: this.temperature,
+        max_tokens: this.maxOutputTokens,
         stream: isStreaming,
       }),
     });
