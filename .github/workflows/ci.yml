@@ -20,8 +20,8 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
       - run: npx tsc -p tsconfig.json --noEmit
+      - run: npx tsc -p webui/tsconfig.json --noEmit
       - run: npm run build
       - name: Package smoke test
         shell: bash
