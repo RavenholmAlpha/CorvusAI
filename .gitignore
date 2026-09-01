@@ -13,4 +13,5 @@ pi-main/
 .github-release-smoke/
 .v011-smoke/
 .v020-smoke/
+.v021-smoke/
 *.tgz
