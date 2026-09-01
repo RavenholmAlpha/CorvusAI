@@ -10,4 +10,5 @@ pi-main/
 .npm-cache/
 .release-smoke-home/
 .install-smoke/
+.github-release-smoke/
 *.tgz
