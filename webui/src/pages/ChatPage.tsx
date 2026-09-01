@@ -2,10 +2,15 @@ import React, { useEffect, useRef, useState } from "react";
 import { eventUrl, getJson, postJson } from "../api";
 import type { Project, Session, SessionContextInfo, Task } from "../types";
 import type { PageProps } from "./shared";
+import { defineTranslations, useI18n } from "../i18n";
 import { MessageContent } from "../MessageContent";
 import { Modal, SimpleForm, TapeDeckReels, toast } from "../components";
 
 type Action = { type: "rename" | "archive" | "delete"; session: Session } | null;
+
+defineTranslations({
+ "chat.send":{en:"SEND ↵","zh-CN":"发送 ↵"},"chat.stop":{en:"STOP RUN","zh-CN":"停止运行"},"chat.sync":{en:"SYNC","zh-CN":"同步"},"chat.model":{en:"MODEL","zh-CN":"模型"},"chat.globalDefault":{en:"Global default","zh-CN":"全局默认"},"chat.pending":{en:"PENDING PERMISSION APPROVAL","zh-CN":"待处理权限审批"},"chat.riskyPaused":{en:"High-risk tool call paused","zh-CN":"高风险工具调用已暂停"},"chat.allowOnce":{en:"ALLOW ONCE","zh-CN":"允许一次"},"chat.alwaysAllow":{en:"ALWAYS ALLOW","zh-CN":"始终允许"},"chat.denyOnce":{en:"DENY ONCE","zh-CN":"拒绝一次"},"chat.neverAllow":{en:"NEVER ALLOW","zh-CN":"始终拒绝"},"chat.master":{en:"MASTER HUB","zh-CN":"主控中心"},"chat.projectAgent":{en:"PROJECT AGENT","zh-CN":"项目智能体"},"chat.subagent":{en:"SUBAGENT","zh-CN":"子智能体"},"chat.cancel":{en:"Cancel","zh-CN":"取消"},"chat.rename":{en:"Rename","zh-CN":"重命名"},"chat.archive":{en:"Archive","zh-CN":"归档"},"chat.delete":{en:"Delete","zh-CN":"删除"},"chat.export":{en:"Export","zh-CN":"导出"}
+});
 
 function ToolCallItem({
   call,
@@ -146,6 +151,7 @@ export function pendingApprovalsForSession<T extends { sessionId?: string | null
 }
 
 export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
+  const { t } = useI18n();
   const project = state.projects.find((item) => item.id === state.activeProjectId);
   const connection = state.activeConnection;
   const [masterSessions, setMasterSessions] = useState<Session[]>([]);
@@ -799,14 +805,14 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
           <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
             {selectedSession && Object.keys(state.providers).length > 0 && (
               <label className="conversation-model-selector" title="Provider and model for this conversation only">
-                <span>MODEL</span>
+                <span>{t("chat.model")}</span>
                 <select
                   aria-label="Conversation provider and model"
                   value={selectedSession.providerId && selectedSession.model ? `${selectedSession.providerId}::${selectedSession.model}` : ""}
                   disabled={switchingModel || status === "running" || status === "submitting"}
                   onChange={(event) => void handleModelSwitch(event.target.value)}
                 >
-                  <option value="">Global default ({connection.model})</option>
+                  <option value="">{t("chat.globalDefault")} ({connection.model})</option>
                   {Object.values(state.providers).flatMap((provider) => provider.models.map((model) => (
                     <option key={`${provider.id}::${model}`} value={`${provider.id}::${model}`}>
                       {provider.label ?? provider.id} / {model}
@@ -964,7 +970,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                 <span className="inline-approval-title">
                   🛡️ PENDING PERMISSION APPROVAL ({pendingApprovals.length})
                 </span>
-                <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>High-risk tool call paused</span>
+                <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>{t("chat.riskyPaused")}</span>
               </div>
               {pendingApprovals.map((app) => (
                 <div key={app.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "#150a0d", padding: "8px 10px", borderRadius: "3px" }}>
@@ -977,10 +983,10 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                     </pre>
                   </div>
                   <div className="inline-approval-actions">
-                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "once")}>✓ ALLOW ONCE</button>
-                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "always")}>✓ ALWAYS ALLOW</button>
-                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "once")}>✗ DENY ONCE</button>
-                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "never")}>✗ NEVER ALLOW</button>
+                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "once")}>✓ {t("chat.allowOnce")}</button>
+                    <button className="approval-btn allow" onClick={() => void handleApproval(app.id, "allow", "always")}>✓ {t("chat.alwaysAllow")}</button>
+                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "once")}>✗ {t("chat.denyOnce")}</button>
+                    <button className="approval-btn reject" onClick={() => void handleApproval(app.id, "deny", "never")}>✗ {t("chat.neverAllow")}</button>
                   </div>
                 </div>
               ))}

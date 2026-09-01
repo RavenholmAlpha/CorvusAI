@@ -1,4 +1,15 @@
 import React, { useEffect, useState } from "react";
+import { defineTranslations, useI18n } from "./i18n";
+
+defineTranslations({
+  "components.transport.runningTitle": { en: "Tape Transport: Running", "zh-CN": "磁带传输：运行中" },
+  "components.transport.idleTitle": { en: "Tape Transport: Idle", "zh-CN": "磁带传输：空闲" },
+  "components.transport.running": { en: "TAPE RUN", "zh-CN": "磁带运行" },
+  "components.transport.stopped": { en: "DECK STOP", "zh-CN": "卡座停止" },
+  "components.modal.close": { en: "Close modal", "zh-CN": "关闭对话框" },
+  "components.form.saving": { en: "SAVING...", "zh-CN": "保存中..." },
+  "components.form.commit": { en: "COMMIT RECORD", "zh-CN": "提交记录" },
+});
 
 export function Card({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
@@ -22,11 +33,12 @@ export function Metric({ label, value }: { label: string; value: number | string
 }
 
 export function TapeDeckReels({ active }: { active?: boolean }) {
+  const { t } = useI18n();
   return (
-    <div className={"tape-deck-reels " + (active ? "active" : "")} title={active ? "Tape Transport: Running" : "Tape Transport: Idle"}>
+    <div className={"tape-deck-reels " + (active ? "active" : "")} title={t(active ? "components.transport.runningTitle" : "components.transport.idleTitle")}>
       <div className="tape-reel" />
       <span style={{ font: "9px var(--font-mono)", color: active ? "var(--amber)" : "var(--text-dim)" }}>
-        {active ? "TAPE RUN" : "DECK STOP"}
+        {t(active ? "components.transport.running" : "components.transport.stopped")}
       </span>
       <div className="tape-reel" />
     </div>
@@ -34,6 +46,7 @@ export function TapeDeckReels({ active }: { active?: boolean }) {
 }
 
 export function Modal({ title, children, onClose }: { title: string; children: React.ReactNode; onClose: () => void }) {
+  const { t } = useI18n();
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -47,7 +60,7 @@ export function Modal({ title, children, onClose }: { title: string; children: R
       <section className="modal" onMouseDown={(e) => e.stopPropagation()}>
         <header>
           <h2>{title}</h2>
-          <button className="modal-close" onClick={onClose} aria-label="Close modal">×</button>
+          <button className="modal-close" onClick={onClose} aria-label={t("components.modal.close")}>×</button>
         </header>
         {children}
       </section>
@@ -62,6 +75,7 @@ export function SimpleForm({
   fields: Array<{ name: string; label?: string; type?: string; placeholder?: string }>;
   onSubmit: (value: Record<string, string>) => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [value, setValue] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
 
@@ -100,7 +114,7 @@ export function SimpleForm({
         );
       })}
       <button className="primary" type="submit" disabled={submitting}>
-        {submitting ? "SAVING..." : "COMMIT RECORD"}
+        {t(submitting ? "components.form.saving" : "components.form.commit")}
       </button>
     </form>
   );

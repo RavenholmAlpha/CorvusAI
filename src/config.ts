@@ -105,6 +105,7 @@ export interface CorvusConfig {
   compactionThreshold: number;
   /** Behavior when switching a conversation to a model with a smaller context window. */
   contextOverflowMode?: "compact-with-previous-model" | "sliding-window";
+  webLocale?: "en" | "zh-CN";
   /** Workbench theme preset name (see src/ui/theme.ts). Toggle at runtime with Ctrl+T. */
   theme: string;
   mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; timeoutMs?: number; url?: string; headers?: Record<string,string>; bearerTokenRef?: string; oauth?: { authorizationEndpoint: string; tokenEndpoint: string; clientId: string; scopes?: string[]; secretName?: string } }>;
@@ -157,6 +158,7 @@ export function createDefaultConfig(): CorvusConfig {
     // Compaction fires at 70% of the context window (safety margin for the model API).
     compactionThreshold: Math.round(1_000_000 * 0.7),
     contextOverflowMode: "compact-with-previous-model",
+    webLocale: "en",
     theme: "cassette",
     installation: { bundle: "default", permissionPreset: "balanced", features: ["durable-harness", "filesystem", "shell", "git", "web", "memory", "skills", "delegation", "workspaces", "mcp-client", "mcp-importer", "webhook", "webui"] },
     plugins: { installed: {}, enabled: {}, grants: {}, configs: {} },

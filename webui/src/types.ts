@@ -186,6 +186,7 @@ export interface WebState {
     completionTokens: number;
     requests: number;
   };
+  webLocale?: "en" | "zh-CN";
   maxToolRounds?: number;
   contextOverflowMode?: "compact-with-previous-model" | "sliding-window";
   permissionPreset?: "safe" | "balanced" | "autonomous" | "custom";

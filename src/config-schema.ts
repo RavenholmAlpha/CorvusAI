@@ -23,6 +23,7 @@ export function validateConfig(config: CorvusConfig): ConfigDiagnostic[] {
   if (!config.model) diagnostics.push({ level: "error", path: "model", message: "Legacy/default model is required" });
   if (!/^https?:\/\//.test(config.endpoint)) diagnostics.push({ level: "error", path: "endpoint", message: "Endpoint must be HTTP(S)" });
   if (config.contextWindowTokens < 8000) diagnostics.push({ level: "error", path: "contextWindowTokens", message: "Context window must be at least 8000" });
+  if (config.webLocale && !["en", "zh-CN"].includes(config.webLocale)) diagnostics.push({ level: "error", path: "webLocale", message: "Web locale must be en or zh-CN" });
   if (config.contextOverflowMode && !["compact-with-previous-model", "sliding-window"].includes(config.contextOverflowMode)) diagnostics.push({ level: "error", path: "contextOverflowMode", message: "Unsupported context overflow mode" });
   for (const [id, provider] of Object.entries(config.providers ?? {})) {
     if (provider.id !== id) diagnostics.push({ level: "warning", path: "providers." + id + ".id", message: "Provider ID normalized to map key" });

@@ -20,6 +20,15 @@ import { NodesPage } from "./pages/NodesPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { InstallationPage } from "./pages/InstallationPage";
 import { SecretsPage } from "./pages/SecretsPage";
+import { defineTranslations, I18nProvider, useI18n, type Locale } from "./i18n";
+import { postJson } from "./api";
+
+
+defineTranslations({
+  "app.group.core": { en: "CORE WORKBENCH", "zh-CN": "核心工作台" }, "app.group.agents": { en: "AGENTS & EXECUTION", "zh-CN": "智能体与执行" }, "app.group.knowledge": { en: "KNOWLEDGE & EXTENSIONS", "zh-CN": "知识与扩展" }, "app.group.gateway": { en: "GATEWAY & CONFIG", "zh-CN": "网关与配置" },
+  "app.page.chat": { en: "CHAT CONTROL", "zh-CN": "对话控制" }, "app.page.overview": { en: "OVERVIEW", "zh-CN": "概览" }, "app.page.projects": { en: "PROJECTS", "zh-CN": "项目" }, "app.page.agents": { en: "HIERARCHY", "zh-CN": "智能体层级" }, "app.page.tasks": { en: "TASKS", "zh-CN": "任务" }, "app.page.approvals": { en: "APPROVALS", "zh-CN": "审批" }, "app.page.timeline": { en: "TIMELINE", "zh-CN": "时间线" }, "app.page.memory": { en: "MEMORY", "zh-CN": "记忆" }, "app.page.skills": { en: "SKILLS", "zh-CN": "技能" }, "app.page.integrations": { en: "MCP & PLUGINS", "zh-CN": "MCP 与插件" }, "app.page.secrets": { en: "SECRETS", "zh-CN": "密钥" }, "app.page.channels": { en: "CHANNELS", "zh-CN": "通道" }, "app.page.automations": { en: "AUTOMATIONS", "zh-CN": "自动化" }, "app.page.routing": { en: "ROUTING", "zh-CN": "路由" }, "app.page.browser": { en: "BROWSER", "zh-CN": "浏览器" }, "app.page.nodes": { en: "NODES", "zh-CN": "节点" }, "app.page.installation": { en: "BUNDLES", "zh-CN": "功能包" }, "app.page.settings": { en: "SETTINGS", "zh-CN": "设置" },
+  "app.brand": { en: "CORVUS", "zh-CN": "CORVUS" }, "app.badge": { en: "C-90 TAPE", "zh-CN": "C-90 磁带" }, "app.connecting": { en: "CONNECTING TO CORVUS DECK-01...", "zh-CN": "正在连接 CORVUS 控制台..." }, "app.controlPlane": { en: "DECK-01 // CONTROL PLANE", "zh-CN": "DECK-01 // 控制平面" }, "app.local": { en: "LOCAL // STEREO", "zh-CN": "本地 // 双声道" }, "app.projectsCount": { en: "{count} PROJECTS", "zh-CN": "{count} 个项目" }, "app.noWorkspace": { en: "NO ACTIVE WORKSPACE", "zh-CN": "没有活动工作区" }, "app.noProject": { en: "No active project", "zh-CN": "没有活动项目" }, "app.activeTape": { en: "[TAPE: {name}] {path}", "zh-CN": "[磁带：{name}] {path}" }, "app.recording": { en: "REC ●", "zh-CN": "录制 ●" }, "app.playing": { en: "PLAY ▶", "zh-CN": "播放 ▶" }, "app.sync": { en: "SYNC", "zh-CN": "同步" }, "app.refresh": { en: "Refresh system state", "zh-CN": "刷新系统状态" }, "app.dismiss": { en: "DISMISS", "zh-CN": "关闭" }, "app.menu": { en: "Toggle navigation menu", "zh-CN": "切换导航菜单" }, "app.fault": { en: "FAULT", "zh-CN": "故障" }
+});
 
 const pages = [
   "overview",
@@ -45,47 +54,47 @@ const pages = [
 type Page = typeof pages[number];
 
 interface NavGroup {
-  label: string;
-  items: Array<{ id: Page; title: string; icon: string }>;
+  labelKey: string;
+  items: Array<{ id: Page; icon: string }>;
 }
 
 const navGroups: NavGroup[] = [
   {
-    label: "CORE WORKBENCH",
+    labelKey: "app.group.core",
     items: [
-      { id: "chat", title: "CHAT CONTROL", icon: "💬" },
-      { id: "overview", title: "OVERVIEW", icon: "📊" },
-      { id: "projects", title: "PROJECTS", icon: "📂" },
+      { id: "chat", icon: "💬" },
+      { id: "overview", icon: "📊" },
+      { id: "projects", icon: "📂" },
     ],
   },
   {
-    label: "AGENTS & EXECUTION",
+    labelKey: "app.group.agents",
     items: [
-      { id: "agents", title: "HIERARCHY", icon: "🌲" },
-      { id: "tasks", title: "TASKS", icon: "⚡" },
-      { id: "approvals", title: "APPROVALS", icon: "🛡️" },
-      { id: "timeline", title: "TIMELINE", icon: "📼" },
+      { id: "agents", icon: "🌲" },
+      { id: "tasks", icon: "⚡" },
+      { id: "approvals", icon: "🛡️" },
+      { id: "timeline", icon: "📼" },
     ],
   },
   {
-    label: "KNOWLEDGE & EXT",
+    labelKey: "app.group.knowledge",
     items: [
-      { id: "memory", title: "MEMORY", icon: "🧠" },
-      { id: "skills", title: "SKILLS", icon: "📜" },
-      { id: "integrations", title: "MCP & PLUGINS", icon: "🔌" },
-      { id: "secrets", title: "SECRETS", icon: "🔐" },
+      { id: "memory", icon: "🧠" },
+      { id: "skills", icon: "📜" },
+      { id: "integrations", icon: "🔌" },
+      { id: "secrets", icon: "🔐" },
     ],
   },
   {
-    label: "GATEWAY & CONFIG",
+    labelKey: "app.group.gateway",
     items: [
-      { id: "channels", title: "CHANNELS", icon: "🌐" },
-      { id: "automations", title: "AUTOMATIONS", icon: "⏰" },
-      { id: "routing", title: "ROUTING", icon: "🔀" },
-      { id: "browser", title: "BROWSER", icon: "🌍" },
-      { id: "nodes", title: "NODES", icon: "🖥️" },
-      { id: "installation", title: "BUNDLES", icon: "📦" },
-      { id: "settings", title: "SETTINGS", icon: "⚙️" },
+      { id: "channels", icon: "🌐" },
+      { id: "automations", icon: "⏰" },
+      { id: "routing", icon: "🔀" },
+      { id: "browser", icon: "🌍" },
+      { id: "nodes", icon: "🖥️" },
+      { id: "installation", icon: "📦" },
+      { id: "settings", icon: "⚙️" },
     ],
   },
 ];
@@ -95,7 +104,8 @@ function readPage(): Page {
   return pages.includes(value) ? value : "overview";
 }
 
-export function App() {
+function AppContent() {
+  const { t } = useI18n();
   const [page, setPage] = useState<Page>(readPage);
   const [state, setState] = useState<WebState | null>(null);
   const [error, setError] = useState("");
@@ -169,7 +179,7 @@ export function App() {
       <div className="center">
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
           <TapeDeckReels active />
-          <span>CONNECTING TO CORVUS DECK-01...</span>
+          <span>{t("app.connecting")}</span>
           {error && <span style={{ color: "var(--led-red)", fontSize: "12px" }}>{error}</span>}
         </div>
       </div>
@@ -189,18 +199,18 @@ export function App() {
       <aside>
         <div className="brand">
           <div className="brand-title">
-            <b>CORVUS</b>
-            <span className="brand-badge">C-90 TAPE</span>
+            <b>{t("app.brand")}</b>
+            <span className="brand-badge">{t("app.badge")}</span>
           </div>
-          <span>DECK-01 // CONTROL PLANE</span>
+          <span>{t("app.controlPlane")}</span>
         </div>
         <nav className="grouped-nav">
           {navGroups.map((group) => {
             const visibleItems = group.items.filter((item) => enabledPages.includes(item.id));
             if (visibleItems.length === 0) return null;
             return (
-              <div key={group.label} className="nav-group-section">
-                <div className="nav-group-header">{group.label}</div>
+              <div key={group.labelKey} className="nav-group-section">
+                <div className="nav-group-header">{t(group.labelKey)}</div>
                 {visibleItems.map((item) => {
                   const isApprovals = item.id === "approvals" && state.approvals.length > 0;
                   const isTasks = item.id === "tasks" && activeTaskCount > 0;
@@ -215,7 +225,7 @@ export function App() {
                     >
                       <span className="nav-item-title">
                         <span className="nav-icon">{item.icon}</span>
-                        {item.title}
+                        {t("app.page." + item.id)}
                       </span>
                       {isApprovals && <span className="nav-badge">{state.approvals.length}</span>}
                       {isTasks && <span className="nav-badge" style={{ background: "var(--amber)" }}>{activeTaskCount}</span>}
@@ -227,8 +237,8 @@ export function App() {
           })}
         </nav>
         <footer>
-          <span>LOCAL // STEREO</span>
-          <span>{state.projects.length} PROJECTS</span>
+          <span>{t("app.local")}</span>
+          <span>{t("app.projectsCount", { count: state.projects.length })}</span>
         </footer>
       </aside>
 
@@ -236,15 +246,15 @@ export function App() {
         {page !== "chat" && (
           <header className="top">
             <div className="top-title-group">
-              <button className="menu-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label="Toggle Navigation Menu">
+              <button className="menu-toggle" onClick={() => setSidebarOpen((open) => !open)} aria-label={t("app.menu")}>
                 ☰
               </button>
               <div>
                 <h1>
-                  <span>{page.toUpperCase()}</span>
+                  <span>{t("app.page." + page)}</span>
                 </h1>
-                <p title={activeProject?.path || "No active project"}>
-                  {activeProject ? `[TAPE: ${activeProject.name}] ${activeProject.path}` : "NO ACTIVE WORKSPACE"}
+                <p title={activeProject?.path || t("app.noProject")}>
+                  {activeProject ? t("app.activeTape", { name: activeProject.name, path: activeProject.path }) : t("app.noWorkspace")}
                 </p>
               </div>
             </div>
@@ -252,12 +262,12 @@ export function App() {
             <div className="top-actions">
               <div className="transport-meter">
                 <span className={"transport-led " + (isRunning ? "rec" : "play")}>
-                  {isRunning ? "REC ●" : "PLAY ▶"}
+                  {t(isRunning ? "app.recording" : "app.playing")}
                 </span>
                 <TapeDeckReels active={isRunning} />
               </div>
-              <button onClick={() => void reload()} title="Refresh system state">
-                SYNC
+              <button onClick={() => void reload()} title={t("app.refresh")}>
+                {t("app.sync")}
               </button>
             </div>
           </header>
@@ -265,9 +275,9 @@ export function App() {
 
         {error && (
           <div style={{ background: "#331212", borderBottom: "1px solid var(--led-red)", padding: "8px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", color: "#ffcdd2", fontSize: "12px", fontFamily: "var(--font-mono)" }}>
-            <span>[FAULT] {error}</span>
+            <span>[{t("app.fault")}] {error}</span>
             <button style={{ padding: "2px 8px", fontSize: "10px" }} onClick={() => setError("")}>
-              DISMISS
+              {t("app.dismiss")}
             </button>
           </div>
         )}
@@ -295,4 +305,10 @@ export function App() {
       <ToastContainer />
     </div>
   );
+}
+
+export function App() {
+  const [locale, setLocale] = useState<Locale>("en");
+  useEffect(() => { getState().then((state) => setLocale(state.webLocale ?? "en")).catch(() => undefined); }, []);
+  return <I18nProvider initialLocale={locale} onLocaleChange={async (next) => { setLocale(next); await postJson("/api/config", { webLocale: next }); }}><AppContent /></I18nProvider>;
 }

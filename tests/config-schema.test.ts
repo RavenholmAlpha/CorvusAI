@@ -13,6 +13,8 @@ describe("Agent OS configuration", () => {
     expect(validateConfig(config)).toEqual(expect.arrayContaining([expect.objectContaining({ path: "agentRoles.reviewer.providerId", level: "error" })]));
   });
 
+  it("validates the persisted WebUI locale", () => { const config=createDefaultConfig(); config.webLocale="zh-CN"; expect(validateConfig(config).filter(item=>item.path==="webLocale")).toEqual([]); (config as any).webLocale="fr"; expect(validateConfig(config)).toEqual(expect.arrayContaining([expect.objectContaining({path:"webLocale",level:"error"})])); });
+
   it("falls back to a secondary provider after a primary provider error", async () => {
     const config = createDefaultConfig();
     config.mainProviderId = "primary";
