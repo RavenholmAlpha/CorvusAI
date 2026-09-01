@@ -333,4 +333,80 @@ describe("database migrations", () => {
 
     db.close();
   });
+
+  it("seamlessly upgrades legacy databases missing updated_at and compatibility columns", async () => {
+    const root = await mkdtemp(join(tmpdir(), "corvus-db-"));
+    roots.push(root);
+    const dbPath = join(root, "legacy.db");
+    const db = openTestDatabase(dbPath);
+
+    // Create legacy tables without updated_at
+    db.exec(`
+      create table projects (
+        id text primary key,
+        name text not null,
+        path text not null
+      );
+      create table runs (
+        id text primary key,
+        status text not null,
+        goal text not null,
+        model text not null,
+        endpoint text not null
+      );
+      create table settings (
+        key text primary key,
+        value_json text not null
+      );
+      create table agents (
+        id text primary key,
+        kind text not null,
+        status text not null
+      );
+      create table project_memories (
+        id text primary key,
+        project_id text not null,
+        kind text not null,
+        title text not null,
+        content text not null,
+        confidence real not null,
+        status text not null
+      );
+      create table channel_deliveries (
+        id text primary key,
+        channel_id text not null,
+        payload_json text not null,
+        status text not null,
+        attempts integer not null
+      );
+    `);
+
+    // Insert legacy rows
+    db.prepare("insert into projects (id, name, path) values (?, ?, ?)").run("proj_legacy", "Legacy App", "/tmp/app");
+    db.prepare("insert into runs (id, status, goal, model, endpoint) values (?, ?, ?, ?, ?)").run("run_legacy", "created", "goal", "model", "http://test");
+    db.prepare("insert into settings (key, value_json) values (?, ?)").run("theme", JSON.stringify("cassette"));
+
+    // Migration must succeed without 'no such column: updated_at' errors
+    expect(() => ensureDatabase(db)).not.toThrow();
+
+    // Verify columns exist
+    expect(tableColumns(db, "projects")).toContain("updated_at");
+    expect(tableColumns(db, "runs")).toContain("updated_at");
+    expect(tableColumns(db, "settings")).toContain("updated_at");
+    expect(tableColumns(db, "agents")).toContain("updated_at");
+    expect(tableColumns(db, "project_memories")).toContain("updated_at");
+    expect(tableColumns(db, "channel_deliveries")).toContain("updated_at");
+
+    // Verify existing rows are preserved and have non-empty timestamps
+    const proj = db.prepare("select * from projects where id = ?").get("proj_legacy") as any;
+    expect(proj.name).toBe("Legacy App");
+    expect(proj.updated_at).toBeTruthy();
+    expect(proj.created_at).toBeTruthy();
+
+    const run = db.prepare("select * from runs where id = ?").get("run_legacy") as any;
+    expect(run.goal).toBe("goal");
+    expect(run.updated_at).toBeTruthy();
+
+    db.close();
+  });
 });

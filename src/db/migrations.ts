@@ -30,12 +30,172 @@ function ensureCompatibilityColumns(db: CorvusDatabase, createdAt: string): void
     db.exec("alter table schema_migrations add column created_at text not null default '1970-01-01T00:00:00.000Z'");
     db.prepare("update schema_migrations set created_at = coalesce(applied_at, ?)").run(createdAt);
   }
+  if (tableExists(db, "runs")) {
+    if (!tableHasColumn(db, "runs", "created_at")) {
+      db.exec("alter table runs add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "runs", "updated_at")) {
+      db.exec("alter table runs add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update runs set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+    if (!tableHasColumn(db, "runs", "session_id")) {
+      db.exec("alter table runs add column session_id text references sessions(id) on delete set null");
+    }
+  }
   if (tableExists(db, "steps") && !tableHasColumn(db, "steps", "created_at")) {
     db.exec("alter table steps add column created_at text not null default '1970-01-01T00:00:00.000Z'");
     db.prepare("update steps set created_at = coalesce(started_at, ?)").run(createdAt);
   }
   if (tableExists(db, "messages") && !tableHasColumn(db, "messages", "metadata_json")) {
     db.exec("alter table messages add column metadata_json text");
+  }
+  if (tableExists(db, "projects")) {
+    if (!tableHasColumn(db, "projects", "config_json")) {
+      db.exec("alter table projects add column config_json text");
+    }
+    if (!tableHasColumn(db, "projects", "last_session_id")) {
+      db.exec("alter table projects add column last_session_id text");
+    }
+    if (!tableHasColumn(db, "projects", "main_agent_id")) {
+      db.exec("alter table projects add column main_agent_id text references agents(id) on delete set null");
+    }
+    if (!tableHasColumn(db, "projects", "created_at")) {
+      db.exec("alter table projects add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "projects", "updated_at")) {
+      db.exec("alter table projects add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update projects set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+  }
+  if (tableExists(db, "settings")) {
+    if (!tableHasColumn(db, "settings", "created_at")) {
+      db.exec("alter table settings add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "settings", "updated_at")) {
+      db.exec("alter table settings add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update settings set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+  }
+  if (tableExists(db, "agents")) {
+    if (!tableHasColumn(db, "agents", "project_id")) {
+      db.exec("alter table agents add column project_id text");
+    }
+    if (!tableHasColumn(db, "agents", "parent_agent_id")) {
+      db.exec("alter table agents add column parent_agent_id text references agents(id) on delete set null");
+    }
+    if (!tableHasColumn(db, "agents", "role_id")) {
+      db.exec("alter table agents add column role_id text");
+    }
+    if (!tableHasColumn(db, "agents", "config_json")) {
+      db.exec("alter table agents add column config_json text");
+    }
+    if (!tableHasColumn(db, "agents", "created_at")) {
+      db.exec("alter table agents add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "agents", "updated_at")) {
+      db.exec("alter table agents add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update agents set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+  }
+  if (tableExists(db, "sessions")) {
+    if (!tableHasColumn(db, "sessions", "project_id")) {
+      db.exec("alter table sessions add column project_id text references projects(id) on delete cascade");
+    }
+    if (!tableHasColumn(db, "sessions", "agent_id")) {
+      db.exec("alter table sessions add column agent_id text references agents(id) on delete set null");
+    }
+    if (!tableHasColumn(db, "sessions", "kind")) {
+      db.exec("alter table sessions add column kind text not null default 'project_main'");
+    }
+    if (!tableHasColumn(db, "sessions", "parent_session_id")) {
+      db.exec("alter table sessions add column parent_session_id text references sessions(id) on delete set null");
+    }
+    if (!tableHasColumn(db, "sessions", "preview")) {
+      db.exec("alter table sessions add column preview text");
+    }
+    if (!tableHasColumn(db, "sessions", "message_count")) {
+      db.exec("alter table sessions add column message_count integer not null default 0");
+    }
+    if (!tableHasColumn(db, "sessions", "total_tokens")) {
+      db.exec("alter table sessions add column total_tokens integer not null default 0");
+    }
+    if (!tableHasColumn(db, "sessions", "created_at")) {
+      db.exec("alter table sessions add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "sessions", "last_active_at")) {
+      db.exec("alter table sessions add column last_active_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update sessions set last_active_at = coalesce(created_at, ?)").run(createdAt);
+    }
+    if (!tableHasColumn(db, "sessions", "archived_at")) {
+      db.exec("alter table sessions add column archived_at text");
+    }
+  }
+  if (tableExists(db, "subagent_tasks")) {
+    if (!tableHasColumn(db, "subagent_tasks", "model_profile")) {
+      db.exec("alter table subagent_tasks add column model_profile text");
+    }
+    if (!tableHasColumn(db, "subagent_tasks", "agent_scope")) {
+      db.exec("alter table subagent_tasks add column agent_scope text not null default 'project'");
+    }
+    if (!tableHasColumn(db, "subagent_tasks", "project_id")) {
+      db.exec("alter table subagent_tasks add column project_id text references projects(id) on delete cascade");
+    }
+    if (!tableHasColumn(db, "subagent_tasks", "parent_task_id")) {
+      db.exec("alter table subagent_tasks add column parent_task_id text references subagent_tasks(id) on delete set null");
+    }
+  }
+  if (tableExists(db, "scope_leases")) {
+    if (!tableHasColumn(db, "scope_leases", "conflict_level")) {
+      db.exec("alter table scope_leases add column conflict_level text not null default 'none'");
+    }
+    if (!tableHasColumn(db, "scope_leases", "heartbeat_at")) {
+      db.exec("alter table scope_leases add column heartbeat_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "scope_leases", "expires_at")) {
+      db.exec("alter table scope_leases add column expires_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+  }
+  if (tableExists(db, "project_memories")) {
+    if (!tableHasColumn(db, "project_memories", "scope")) {
+      db.exec("alter table project_memories add column scope text not null default 'project'");
+    }
+    if (!tableHasColumn(db, "project_memories", "source_type")) {
+      db.exec("alter table project_memories add column source_type text not null default 'manual'");
+    }
+    if (!tableHasColumn(db, "project_memories", "source_id")) {
+      db.exec("alter table project_memories add column source_id text");
+    }
+    if (!tableHasColumn(db, "project_memories", "content_hash")) {
+      db.exec("alter table project_memories add column content_hash text");
+    }
+    if (!tableHasColumn(db, "project_memories", "verified")) {
+      db.exec("alter table project_memories add column verified integer not null default 0");
+    }
+    if (!tableHasColumn(db, "project_memories", "sensitivity")) {
+      db.exec("alter table project_memories add column sensitivity text not null default 'normal'");
+    }
+    if (!tableHasColumn(db, "project_memories", "created_at")) {
+      db.exec("alter table project_memories add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "project_memories", "updated_at")) {
+      db.exec("alter table project_memories add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update project_memories set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+  }
+  if (tableExists(db, "channel_deliveries")) {
+    if (!tableHasColumn(db, "channel_deliveries", "created_at")) {
+      db.exec("alter table channel_deliveries add column created_at text not null default '1970-01-01T00:00:00.000Z'");
+    }
+    if (!tableHasColumn(db, "channel_deliveries", "updated_at")) {
+      db.exec("alter table channel_deliveries add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+      db.prepare("update channel_deliveries set updated_at = coalesce(created_at, ?)").run(createdAt);
+    }
+  }
+  if (tableExists(db, "channel_session_bindings") && !tableHasColumn(db, "channel_session_bindings", "updated_at")) {
+    db.exec("alter table channel_session_bindings add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
+  }
+  if (tableExists(db, "memory_embeddings") && !tableHasColumn(db, "memory_embeddings", "updated_at")) {
+    db.exec("alter table memory_embeddings add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
   }
 }
 
