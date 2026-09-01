@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>AI Orchestrator - Deep Context Management</title>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@100..900&family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..900&display=swap" rel="stylesheet"/>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Theme Configuration -->
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary": "#c8c6c5",
+                    "error-container": "#93000a",
+                    "surface-container-highest": "#353534",
+                    "surface-bright": "#393939",
+                    "on-secondary-fixed": "#1b1b1c",
+                    "on-secondary": "#303030",
+                    "on-surface": "#e5e2e1",
+                    "on-tertiary-container": "#313131",
+                    "secondary-container": "#474746",
+                    "surface-tint": "#ffb693",
+                    "primary-fixed-dim": "#ffb693",
+                    "surface": "#131313",
+                    "on-tertiary-fixed": "#1b1c1c",
+                    "surface-variant": "#353534",
+                    "inverse-surface": "#e5e2e1",
+                    "on-primary-fixed": "#351000",
+                    "surface-container": "#201f1f",
+                    "on-tertiary-fixed-variant": "#474746",
+                    "on-background": "#e5e2e1",
+                    "primary-container": "#ff6b00",
+                    "outline-variant": "#5a4136",
+                    "error": "#ffb4ab",
+                    "on-tertiary": "#303030",
+                    "tertiary": "#c8c6c5",
+                    "background": "#131313",
+                    "outline": "#a98a7d",
+                    "on-error": "#690005",
+                    "on-primary-fixed-variant": "#7a3000",
+                    "on-primary": "#561f00",
+                    "tertiary-container": "#9a9999",
+                    "primary": "#ffb693",
+                    "surface-container-lowest": "#0e0e0e",
+                    "surface-container-high": "#2a2a2a",
+                    "tertiary-fixed-dim": "#c8c6c5",
+                    "on-primary-container": "#572000",
+                    "inverse-primary": "#a04100",
+                    "surface-dim": "#131313",
+                    "inverse-on-surface": "#313030",
+                    "primary-fixed": "#ffdbcc",
+                    "on-surface-variant": "#e2bfb0",
+                    "secondary-fixed": "#e5e2e1",
+                    "surface-container-low": "#1c1b1b",
+                    "on-secondary-fixed-variant": "#474746",
+                    "on-secondary-container": "#b7b5b4",
+                    "tertiary-fixed": "#e4e2e1",
+                    "on-error-container": "#ffdad6",
+                    "secondary-fixed-dim": "#c8c6c5"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "sidebar-width": "280px",
+                    "container-padding": "24px",
+                    "unit": "4px",
+                    "gutter": "16px",
+                    "inspector-width": "320px"
+            },
+            "fontFamily": {
+                    "display-lg": ["Geist"],
+                    "headline-md": ["Geist"],
+                    "title-sm": ["Inter"],
+                    "body-md": ["Inter"],
+                    "label-xs": ["JetBrains Mono"],
+                    "code-sm": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                    "display-lg": ["48px", {"lineHeight": "56px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "title-sm": ["16px", {"lineHeight": "24px", "fontWeight": "600"}],
+                    "body-md": ["14px", {"lineHeight": "20px", "fontWeight": "400"}],
+                    "label-xs": ["10px", {"lineHeight": "14px", "letterSpacing": "0.05em", "fontWeight": "500"}],
+                    "code-sm": ["12px", {"lineHeight": "18px", "fontWeight": "400"}]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        /* Custom thin scrollbar */
+        ::-webkit-scrollbar {
+            width: 4px;
+            height: 4px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+        
+        /* Toggle Switch */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #ff6b00;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #ff6b00;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background h-screen overflow-hidden flex font-body-md text-body-md antialiased selection:bg-primary-container selection:text-background">
+<!-- Global SideNavBar -->
+<nav class="fixed left-0 top-0 h-full w-[280px] bg-surface-container border-r border-outline-variant flex flex-col py-4 px-3 z-40 transition-all duration-150 ease-in-out">
+<!-- Header -->
+<div class="flex items-center gap-3 mb-8 px-2">
+<div class="w-8 h-8 rounded-full bg-surface-bright flex items-center justify-center overflow-hidden border border-outline-variant">
+<img class="w-full h-full object-cover" data-alt="A macro shot of a sleek, dark metallic AI processor chip with glowing orange circuitry lines, highly detailed, dramatic lighting, conveying advanced computing power." src="https://lh3.googleusercontent.com/aida-public/AB6AXuA5nwAEL_ldoo_269mKQCuj9Y9ilqQ35Xe1n_bMkOXgRsaTj0HapsG2VFMJwnoO74uiMdZHapi5ELiOhM0X8-zt6_naan3y5hi5eaxT4gLh8HobN5FfpI-PlKcSEDhgwgDbrJy2TAWN-OgMQ29MMrkxSax9pUrgbacLIaVMcb7QehWj9Z95zkdg_yC2RsHbmguJ7cSSwDYrls_i3sfB856TxYUdG-6rjfvIdCKfAei5oiY9MGnO0aWsKA"/>
+</div>
+<div>
+<h1 class="text-title-sm font-display-lg font-bold text-on-surface leading-tight">AI Orchestrator</h1>
+<p class="font-label-xs text-label-xs text-on-surface-variant">v2.4.0-alpha</p>
+</div>
+</div>
+<!-- CTA -->
+<button class="mb-6 mx-2 bg-primary-container text-background font-body-md font-bold py-2 px-4 rounded transition-all hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4)] flex items-center justify-center gap-2">
+<span class="material-symbols-outlined text-[18px]" style="font-variation-settings: 'FILL' 1;">add</span>
+            New Project
+        </button>
+<!-- Navigation Links -->
+<div class="flex-1 overflow-y-auto">
+<ul class="space-y-1">
+<!-- Projects -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">folder_open</span>
+                        Projects
+                    </a>
+</li>
+<!-- Folders -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">folder_copy</span>
+                        Folders
+                    </a>
+</li>
+<!-- Archive -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">archive</span>
+                        Archive
+                    </a>
+</li>
+<!-- Active Sessions -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">forum</span>
+                        Active Sessions
+                    </a>
+</li>
+<!-- Memory (Active) -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 bg-secondary-container/20 text-primary font-bold border-r-2 border-primary transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]" style="font-variation-settings: 'FILL' 1;">memory</span>
+                        Memory
+                    </a>
+</li>
+<!-- Pinned Prompts -->
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">push_pin</span>
+                        Pinned Prompts
+                    </a>
+</li>
+</ul>
+</div>
+<!-- Footer Links -->
+<div class="mt-auto border-t border-outline-variant/30 pt-4 px-2">
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">settings</span>
+                        Settings
+                    </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded text-on-surface-variant font-body-md hover:bg-secondary-container hover:text-on-secondary-container transition-all duration-150 ease-in-out" href="#">
+<span class="material-symbols-outlined text-[20px]">help</span>
+                        Support
+                    </a>
+</li>
+</ul>
+</div>
+</nav>
+<!-- Main Workspace -->
+<main class="flex flex-col flex-1 ml-[280px] h-full relative z-10">
+<!-- Global TopNavBar -->
+<header class="flex justify-between items-center h-16 w-full px-gutter bg-surface/80 backdrop-blur-md border-b border-outline-variant fixed top-0 left-[280px] right-0 z-30 transition-transform">
+<div class="flex items-center gap-6">
+<!-- Brand / Product Name -->
+<div class="font-display-lg text-headline-md font-bold text-primary tracking-tight">
+                    Agent Orchestration Engine
+                </div>
+<!-- Navigation Links -->
+<nav class="hidden md:flex gap-6 ml-4">
+<a class="text-on-surface-variant text-body-md hover:text-primary transition-colors" href="#">Workspace Alpha</a>
+<a class="text-on-surface-variant text-body-md hover:text-primary transition-colors" href="#">Workspace Beta</a>
+</nav>
+</div>
+<div class="flex items-center gap-4">
+<!-- Search Bar Placeholder -->
+<div class="relative hidden lg:block">
+<span class="material-symbols-outlined absolute left-2 top-1/2 -translate-y-1/2 text-on-surface-variant text-[18px]">search</span>
+<input class="bg-surface-container-high border border-outline-variant rounded pl-8 pr-3 py-1.5 text-body-md text-on-surface focus:border-primary focus:ring-1 focus:ring-primary w-64 transition-all" placeholder="Search orchestrations..." type="text"/>
+</div>
+<!-- Icon Actions -->
+<div class="flex items-center gap-1 text-on-surface-variant">
+<button class="p-2 rounded hover:bg-secondary-container/50 hover:text-primary transition-colors"><span class="material-symbols-outlined text-[20px]">notifications</span></button>
+<button class="p-2 rounded hover:bg-secondary-container/50 hover:text-primary transition-colors"><span class="material-symbols-outlined text-[20px]">hub</span></button>
+<button class="p-2 rounded hover:bg-secondary-container/50 hover:text-primary transition-colors"><span class="material-symbols-outlined text-[20px]">account_tree</span></button>
+</div>
+<!-- Action Buttons -->
+<div class="flex items-center gap-2 border-l border-outline-variant pl-4">
+<button class="bg-transparent border border-outline-variant text-on-surface hover:border-on-surface py-1.5 px-4 rounded text-title-sm transition-all active:scale-95 duration-100">
+                        Stop All
+                    </button>
+<button class="bg-primary-container text-background font-bold py-1.5 px-4 rounded text-title-sm hover:shadow-[inset_0_1px_0_rgba(255,255,255,0.4)] transition-all active:scale-95 duration-100 flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">rocket_launch</span>
+                        Deploy Agent
+                    </button>
+</div>
+<!-- Avatar -->
+<div class="w-8 h-8 rounded-full ml-2 border border-outline-variant overflow-hidden cursor-pointer">
+<img class="w-full h-full object-cover" data-alt="A minimalist, geometric avatar representing a digital profile, dark background, sharp orange and grey shapes, clean corporate design." src="https://lh3.googleusercontent.com/aida-public/AB6AXuCYUEuWdZcHlji3ZpHRTxcUTsZR6opV8QZizq30Z3IirJSKmJrNUC8mzXPEWDbG3nUQwYXZKYLqY2lox23EVyPGLTDk9vyqcN8hrjLrFP5pIwYGRwGIO1cjzaeX0bxkMy46f5ZwnXJjgg8h4FIbbnxj9P8Dymbjj4w2jdFnwQUEub421P9eC6WnskATbP859jKzGt2MjWoOcfl_AwkqzDeqzEvPSXTJMY6OvRoCDKdEM8DuC-X9iljv0Q"/>
+</div>
+</div>
+</header>
+<!-- 3-Column Content Canvas -->
+<div class="flex flex-1 mt-16 mb-8 overflow-hidden bg-background">
+<!-- Column 1: Knowledge Assets (Left Panel) -->
+<section class="w-[300px] border-r border-outline-variant/50 bg-surface-container-low flex flex-col flex-shrink-0">
+<div class="p-4 border-b border-outline-variant/30 flex justify-between items-center bg-surface-container/50">
+<h2 class="font-headline-md text-title-sm text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary text-[18px]">dataset</span>
+                        Knowledge Assets
+                    </h2>
+<button class="text-on-surface-variant hover:text-primary transition-colors">
+<span class="material-symbols-outlined text-[18px]">add_box</span>
+</button>
+</div>
+<div class="flex-1 overflow-y-auto p-3 space-y-4">
+<!-- Tree View Structure -->
+<div class="space-y-1">
+<!-- Folder Item -->
+<div class="flex flex-col">
+<div class="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-container cursor-pointer group">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant group-hover:text-primary transition-colors">keyboard_arrow_down</span>
+<span class="material-symbols-outlined text-[16px] text-primary">folder</span>
+<span class="text-body-md text-on-surface">Core Documentation</span>
+</div>
+<!-- Nested Items -->
+<div class="pl-7 space-y-1 mt-1 border-l border-outline-variant/20 ml-3">
+<div class="flex justify-between items-center py-1 px-2 rounded hover:bg-surface-container cursor-pointer group">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-error">picture_as_pdf</span>
+<span class="text-body-md text-on-surface-variant group-hover:text-on-surface truncate w-32">API_Spec_v2.pdf</span>
+</div>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">2.4 MB</span>
+</div>
+<div class="flex justify-between items-center py-1 px-2 rounded hover:bg-surface-container cursor-pointer group">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[14px] text-error">picture_as_pdf</span>
+<span class="text-body-md text-on-surface-variant group-hover:text-on-surface truncate w-32">Auth_Flow.pdf</span>
+</div>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">840 KB</span>
+</div>
+</div>
+</div>
+<!-- Folder Item -->
+<div class="flex flex-col mt-2">
+<div class="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-surface-container cursor-pointer group">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant group-hover:text-primary transition-colors">keyboard_arrow_right</span>
+<span class="material-symbols-outlined text-[16px] text-secondary">folder</span>
+<span class="text-body-md text-on-surface-variant">External Context</span>
+</div>
+</div>
+<!-- File Item -->
+<div class="flex justify-between items-center py-1.5 px-2 mt-2 rounded bg-surface-container/50 border border-outline-variant/30 cursor-pointer group">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-blue-400">code</span>
+<span class="text-body-md text-on-surface group-hover:text-primary truncate w-32">main_logic.py</span>
+</div>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">12 KB</span>
+</div>
+</div>
+</div>
+</section>
+<!-- Column 2: Memory Graph (Central Area) -->
+<section class="flex-1 flex flex-col bg-background relative">
+<!-- Top Controls -->
+<div class="h-12 border-b border-outline-variant/30 flex items-center justify-between px-6 bg-surface/30">
+<div class="flex gap-4">
+<button class="text-primary border-b-2 border-primary pb-1 text-title-sm font-bold flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">grid_view</span> Semantic Snapshots
+                        </button>
+<button class="text-on-surface-variant hover:text-primary transition-colors pb-1 text-title-sm flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">share</span> Relationship Graph
+                        </button>
+</div>
+<div class="font-code-sm text-code-sm text-on-surface-variant/70 flex items-center gap-2">
+<span class="w-2 h-2 rounded-full bg-primary-container animate-pulse"></span> Indexing Active
+                    </div>
+</div>
+<!-- Canvas Grid -->
+<div class="flex-1 overflow-y-auto p-container-padding">
+<div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+<!-- Snapshot Card 1 -->
+<div class="bg-surface-container rounded-lg p-4 border-t border-outline-variant/20 hover:border-primary/50 transition-colors cursor-default relative overflow-hidden group">
+<div class="absolute top-0 right-0 p-2 opacity-0 group-hover:opacity-100 transition-opacity">
+<button class="text-on-surface-variant hover:text-primary"><span class="material-symbols-outlined text-[18px]">open_in_new</span></button>
+</div>
+<div class="flex justify-between items-start mb-3">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">data_object</span>
+<h3 class="font-title-sm text-on-surface">Authentication Mechanism</h3>
+</div>
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-label-xs font-code-sm text-green-400 border border-green-900/30">Match: 98%</span>
+</div>
+<p class="font-code-sm text-code-sm text-on-surface-variant mb-4 line-clamp-3">
+                                The orchestrator utilizes a dual-token JWT flow. Access tokens have a 15m lifespan, refresh tokens 7d. Key rotation occurs via AWS KMS.
+                            </p>
+<div class="flex gap-2">
+<span class="px-2 py-1 rounded bg-background border border-outline-variant/30 text-label-xs font-code-sm text-secondary">Source: API_Spec_v2</span>
+<span class="px-2 py-1 rounded bg-background border border-outline-variant/30 text-label-xs font-code-sm text-secondary">Chunk: #442</span>
+</div>
+</div>
+<!-- Snapshot Card 2 -->
+<div class="bg-surface-container rounded-lg p-4 border-t border-outline-variant/20 border-primary shadow-[inset_0_0_0_1px_rgba(255,107,0,0.5)] cursor-default relative overflow-hidden">
+<div class="flex justify-between items-start mb-3">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-primary">psychology</span>
+<h3 class="font-title-sm text-on-surface">Agent Loop Constraints</h3>
+</div>
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-label-xs font-code-sm text-green-400 border border-green-900/30">Match: 92%</span>
+</div>
+<p class="font-code-sm text-code-sm text-on-surface-variant mb-4 line-clamp-3">
+                                Maximum recursion depth for task breakdown is 5. Default timeout per LLM call is 45s. Fallback policy is 'graceful_degradation' returning partial states.
+                            </p>
+<div class="flex gap-2">
+<span class="px-2 py-1 rounded bg-background border border-outline-variant/30 text-label-xs font-code-sm text-secondary">Source: main_logic.py</span>
+</div>
+</div>
+<!-- Snapshot Card 3 -->
+<div class="bg-surface-container rounded-lg p-4 border-t border-outline-variant/20 hover:border-primary/50 transition-colors cursor-default relative overflow-hidden group opacity-60">
+<div class="flex justify-between items-start mb-3">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-secondary">history</span>
+<h3 class="font-title-sm text-on-surface">Past Orchestration Result</h3>
+</div>
+<span class="bg-surface-container-high px-2 py-0.5 rounded text-label-xs font-code-sm text-yellow-500 border border-yellow-900/30">Match: 45%</span>
+</div>
+<p class="font-code-sm text-code-sm text-on-surface-variant mb-4 line-clamp-2">
+                                Execution log from session #0x9F3A. The agent hallucinated a database schema that did not exist in the context window.
+                            </p>
+<div class="flex gap-2">
+<span class="px-2 py-1 rounded bg-background border border-outline-variant/30 text-label-xs font-code-sm text-secondary">Source: Session Log</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Column 3: Context Inspector (Right Panel) -->
+<aside class="w-[320px] bg-surface-container border-l border-outline-variant/50 flex flex-col flex-shrink-0 z-20 shadow-[-4px_0_24px_rgba(0,0,0,0.5)]">
+<div class="h-12 border-b border-outline-variant/30 flex items-center px-4 bg-surface-container-high">
+<h2 class="font-title-sm font-bold text-on-surface flex items-center gap-2 uppercase tracking-wide text-[12px]">
+<span class="material-symbols-outlined text-[16px]">tune</span> Context Inspector
+                    </h2>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-6">
+<!-- Injection Status -->
+<div class="bg-background rounded p-3 border border-outline-variant/30">
+<div class="flex justify-between items-center mb-2">
+<span class="font-label-xs text-label-xs text-on-surface-variant uppercase">Prompt Payload</span>
+<span class="font-code-sm text-code-sm text-primary">3.2k / 128k</span>
+</div>
+<div class="w-full bg-surface-container-highest h-1.5 rounded-full overflow-hidden">
+<div class="bg-primary-container h-full" style="width: 15%"></div>
+</div>
+</div>
+<!-- Toggles -->
+<div class="space-y-4">
+<h3 class="font-label-xs text-label-xs text-on-surface-variant uppercase border-b border-outline-variant/20 pb-1">Active Injections</h3>
+<!-- Toggle Item 1 -->
+<div class="flex items-center justify-between group">
+<div class="flex flex-col">
+<span class="font-body-md text-on-surface group-hover:text-primary transition-colors cursor-help" title="Injects system prompt base instructions">System Directives</span>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">Always required</span>
+</div>
+<div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-not-allowed right-0 border-primary" disabled="" id="toggle1" name="toggle" type="checkbox"/>
+<label class="toggle-label block overflow-hidden h-5 rounded-full bg-primary-container cursor-not-allowed opacity-50" for="toggle1"></label>
+</div>
+</div>
+<!-- Toggle Item 2 -->
+<div class="flex items-center justify-between group">
+<div class="flex flex-col">
+<span class="font-body-md text-on-surface group-hover:text-primary transition-colors cursor-pointer">Semantic Search Results</span>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">Top-k: 5 chunks</span>
+</div>
+<div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-background border-4 border-outline-variant appearance-none cursor-pointer z-10 transition-all right-0 border-primary" id="toggle2" name="toggle" type="checkbox"/>
+<label class="toggle-label block overflow-hidden h-5 rounded-full bg-surface-bright cursor-pointer transition-colors bg-primary-container" for="toggle2"></label>
+</div>
+</div>
+<!-- Toggle Item 3 -->
+<div class="flex items-center justify-between group">
+<div class="flex flex-col">
+<span class="font-body-md text-on-surface group-hover:text-primary transition-colors cursor-pointer">Conversation History</span>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">Last 10 turns</span>
+</div>
+<div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-background border-4 border-outline-variant appearance-none cursor-pointer z-10 transition-all right-0 border-primary" id="toggle3" name="toggle" type="checkbox"/>
+<label class="toggle-label block overflow-hidden h-5 rounded-full bg-surface-bright cursor-pointer transition-colors bg-primary-container" for="toggle3"></label>
+</div>
+</div>
+<!-- Toggle Item 4 -->
+<div class="flex items-center justify-between group">
+<div class="flex flex-col">
+<span class="font-body-md text-on-surface group-hover:text-primary transition-colors cursor-pointer">Working Memory</span>
+<span class="font-code-sm text-label-xs text-on-surface-variant/50">Scratchpad variables</span>
+</div>
+<div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+<input class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-background border-4 border-outline-variant appearance-none cursor-pointer z-10 transition-all left-0" id="toggle4" name="toggle" type="checkbox"/>
+<label class="toggle-label block overflow-hidden h-5 rounded-full bg-surface-bright cursor-pointer transition-colors" for="toggle4"></label>
+</div>
+</div>
+</div>
+<!-- Parameter Tweaks -->
+<div class="space-y-3 pt-4 border-t border-outline-variant/20">
+<h3 class="font-label-xs text-label-xs text-on-surface-variant uppercase">Retrieval Parameters</h3>
+<div>
+<div class="flex justify-between items-center mb-1">
+<label class="font-code-sm text-code-sm text-on-surface">Similarity Threshold</label>
+<span class="font-code-sm text-code-sm text-primary">0.85</span>
+</div>
+<input class="w-full h-1 bg-surface-bright rounded-lg appearance-none cursor-pointer accent-primary-container" max="100" min="0" type="range" value="85"/>
+</div>
+<div>
+<div class="flex justify-between items-center mb-1">
+<label class="font-code-sm text-code-sm text-on-surface">Max Chunks (Top-K)</label>
+<span class="font-code-sm text-code-sm text-primary">5</span>
+</div>
+<input class="w-full h-1 bg-surface-bright rounded-lg appearance-none cursor-pointer accent-primary-container" max="20" min="1" type="range" value="5"/>
+</div>
+</div>
+</div>
+<!-- Inspector Action -->
+<div class="p-4 border-t border-outline-variant/30 bg-surface-container-high mt-auto">
+<button class="w-full bg-transparent border border-primary text-primary font-bold py-2 rounded text-body-md hover:bg-primary/10 transition-colors flex justify-center items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">sync</span>
+                        Re-evaluate Context
+                    </button>
+</div>
+</aside>
+</div>
+<!-- Global Footer -->
+<footer class="fixed bottom-0 left-[280px] right-0 h-8 bg-surface-container-lowest border-t border-outline-variant flex justify-between items-center px-gutter z-30">
+<div class="font-code-sm text-code-sm text-on-tertiary-fixed-variant flex gap-4">
+<span>System Telemetry: <span class="text-green-500">Online</span></span>
+<span class="hidden sm:inline">|</span>
+<span class="hidden sm:inline">Latency: 24ms</span>
+<span class="hidden md:inline">|</span>
+<span class="hidden md:inline text-primary">Token Usage: 1.2k/8k</span>
+</div>
+<div class="flex gap-4 font-label-xs text-label-xs">
+<a class="text-on-tertiary-fixed-variant hover:text-on-surface transition-colors" href="#">API Docs</a>
+<a class="text-on-tertiary-fixed-variant hover:text-on-surface transition-colors" href="#">System Status</a>
+</div>
+</footer>
+</main>
+<script>
+        // Simple script to handle custom toggle visual states if native CSS isn't enough, 
+        // though the CSS provided handles the basic sliding logic.
+        document.querySelectorAll('.toggle-checkbox').forEach(toggle => {
+            toggle.addEventListener('change', function() {
+                if(this.checked) {
+                    this.style.left = 'auto';
+                    this.style.right = '0';
+                    this.style.borderColor = '#ff6b00';
+                    this.nextElementSibling.style.backgroundColor = '#ff6b00';
+                } else {
+                    this.style.right = 'auto';
+                    this.style.left = '0';
+                    this.style.borderColor = '#5a4136'; // outline-variant
+                    this.nextElementSibling.style.backgroundColor = '#393939'; // surface-bright
+                }
+            });
+        });
+    </script>
+</body></html>

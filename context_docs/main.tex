@@ -1,0 +1,1154 @@
+% ============================================================
+%  SmoothContext: Asynchronous Dual-Buffer Context Compression
+%  for Seamless Memory Continuity in LLM-Based Agents
+% ============================================================
+%  Compiled with: xelatex -> bibtex -> xelatex x 2
+% ============================================================
+
+\documentclass[10pt,twocolumn]{article}
+
+% ── Geometry & Layout ──────────────────────────────────────────
+\usepackage[
+  letterpaper,
+  top=1in, bottom=1in,
+  left=0.75in, right=0.75in,
+  columnsep=0.25in
+]{geometry}
+
+% ── Fonts & Encoding ──────────────────────────────────────────
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{times}
+\else
+  \usepackage{fontspec}
+  \usepackage{xeCJK}
+  \IfFontExistsTF{Times New Roman}{\setmainfont{Times New Roman}}{\setmainfont{TeX Gyre Termes}}
+  \IfFontExistsTF{SimSun}{\setCJKmainfont{SimSun}}{
+    \IfFontExistsTF{Noto Serif CJK SC}{\setCJKmainfont{Noto Serif CJK SC}}{\setCJKmainfont{FandolSong-Regular}}
+  }
+\fi
+\usepackage{microtype}
+
+% ── Mathematics ───────────────────────────────────────────────
+\usepackage{amsmath, amssymb, amsthm}
+\usepackage{mathtools}
+
+% ── Graphics & Tables ────────────────────────────────────────
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{colortbl}
+\usepackage[table]{xcolor}
+\usepackage{subcaption}
+
+% ── Algorithms ───────────────────────────────────────────────
+\usepackage[ruled,vlined,linesnumbered]{algorithm2e}
+\SetAlFnt{\small}
+\SetAlCapFnt{\small}
+\SetAlCapNameFnt{\small}
+
+% ── Listings (pseudocode) ────────────────────────────────────
+\usepackage{listings}
+\lstset{
+  basicstyle=\ttfamily\scriptsize,
+  keywordstyle=\bfseries\color{blue!70!black},
+  commentstyle=\itshape\color{gray},
+  stringstyle=\color{red!60!black},
+  breaklines=true,
+  frame=single,
+  framerule=0.4pt,
+  xleftmargin=1em,
+  numbers=left,
+  numberstyle=\tiny\color{gray},
+  numbersep=5pt,
+  tabsize=4,
+  showstringspaces=false
+}
+
+% ── Python style for listings ────────────────────────────────
+\lstdefinestyle{python}{
+  language=Python,
+  keywordstyle=\bfseries\color{blue!70!black},
+  keywordstyle=[2]\color{teal},
+  morekeywords=[2]{self, True, False, None, async, await},
+  commentstyle=\itshape\color{gray!70!black},
+  stringstyle=\color{red!50!black},
+  emph={SmoothContextOrchestrator, ContextBuffer, SlidingWindow,
+        Config, LLMClient, State, Turn},
+  emphstyle=\color{purple!70!black}\bfseries,
+}
+
+% ── Hyperlinks ───────────────────────────────────────────────
+\usepackage[
+  colorlinks=true,
+  linkcolor=blue!70!black,
+  citecolor=blue!70!black,
+  urlcolor=blue!70!black
+]{hyperref}
+
+% ── Cross-referencing ────────────────────────────────────────
+\usepackage[capitalize,nameinlink]{cleveref}
+
+% ── Theorems ─────────────────────────────────────────────────
+\newtheorem{definition}{Definition}
+\newtheorem{property}{Property}
+\newtheorem{theorem}{Theorem}
+\newtheorem{lemma}{Lemma}
+\newtheorem{corollary}{Corollary}
+
+% ── Custom Commands ──────────────────────────────────────────
+\newcommand{\sys}{\textsc{SmoothContext}}
+\newcommand{\bufG}{\mathcal{B}_G}
+\newcommand{\bufL}{\mathcal{B}_L}
+\newcommand{\psys}{\mathcal{P}_{\mathrm{sys}}}
+\newcommand{\Dtok}{\tau}
+\newcommand{\Tmax}{T_{\max}}
+\newcommand{\Ttrig}{T_{\mathrm{trigger}}}
+\newcommand{\concat}{\;\|\;}
+\newcommand{\ie}{\textit{i.e.}}
+\newcommand{\eg}{\textit{e.g.}}
+\newcommand{\etal}{\textit{et~al.}}
+\newcommand{\cf}{\textit{cf.}}
+
+% ── Title Formatting ─────────────────────────────────────────
+\usepackage{titlesec}
+\titleformat{\section}{\large\bfseries}{\thesection}{1em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection}{0.8em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection}{0.6em}{}
+
+% ── Spacing ──────────────────────────────────────────────────
+\usepackage{setspace}
+\setlength{\parskip}{0.3em}
+\setlength{\parindent}{1em}
+
+% ── Footnotes ────────────────────────────────────────────────
+\usepackage[bottom]{footmisc}
+
+% ── Float control ────────────────────────────────────────────
+\usepackage{float}
+\usepackage{dblfloatfix}
+
+% ── Enumerations ─────────────────────────────────────────────
+\usepackage{enumitem}
+\setlist{nosep,leftmargin=1.5em}
+
+% ════════════════════════════════════════════════════════════════
+%                        DOCUMENT BEGIN
+% ════════════════════════════════════════════════════════════════
+\begin{document}
+
+% ── Title Block ──────────────────────────────────────────────
+\twocolumn[
+\begin{center}
+  {\LARGE\bfseries \sys{}: Asynchronous Dual-Buffer Context Compression \\[4pt]
+   for Seamless Memory Continuity in LLM-Based Agents}
+
+  \vspace{0.4em}
+  {\small\textit{基于动态双缓冲切换的异步上下文平滑压缩策略——消除大模型 Agent 记忆断层的工程化方案}}
+
+  \vspace{1.2em}
+
+  {\large
+    Anonymous Authors\textsuperscript{$\dagger$} \\[4pt]
+    \textsuperscript{$\dagger$}Under Double-Blind Review \\[2pt]
+    {\normalsize\texttt{anonymous@submission.org}}
+  }
+
+  \vspace{1.5em}
+
+  \parbox{0.92\textwidth}{\small\textbf{Abstract.}
+    Large Language Model (LLM)-based Agents increasingly operate in long-horizon,
+    multi-turn dialogue settings where the cumulative token count inevitably exceeds
+    the model's context window limit. Conventional context compaction strategies address
+    this by synchronously summarizing the full conversational history when a token threshold
+    is reached, atomically replacing the context with a lossy summary. This ``stop-the-world''
+    approach introduces an abrupt information discontinuity---a \emph{Memory Cliff}---that
+    destroys fine-grained details from recent high-frequency exchanges and blocks inference
+    during summarization.
+
+    We propose \sys{}, a novel context management framework that eliminates the Memory
+    Cliff through an \emph{asynchronous dual-buffer switching} architecture. When the
+    compaction threshold is reached, a background process asynchronously generates a
+    compressed summary of the historical prefix, while the front-end Agent \emph{immediately}
+    switches to a local sliding-window mode that preserves the most recent $k$ turns in
+    full fidelity. Upon completion of the asynchronous summary, a \emph{Smooth Transition
+    Stitching Protocol} (STSP) merges the compressed history with the transition-period
+    dialogue, seamlessly restoring the Agent to global mode. The entire mechanism operates
+    at the application orchestration layer and requires no model fine-tuning.
+
+    We present the architecture, state machine, stitching protocol, implementation
+    requirements, and a reproducible evaluation protocol for testing the design against
+    synchronous summarization and retrieval-augmented memory baselines. Implementation,
+    benchmark instances, and measured results are pending. The present
+    artifact is a method specification rather than a completed empirical report: raw
+    benchmark instances, model logs, human annotations, and statistical analysis scripts
+    are required before any numerical performance claim can be made. The framework is
+    technically implementable at the orchestration layer, but its latency, recall, and
+    cost benefits must be established under explicitly logged deployment conditions.
+  }
+
+  \vspace{0.6em}
+  {\small\textbf{Keywords:} Large Language Models $\cdot$ Context Management $\cdot$ Agent Memory $\cdot$ Double Buffering $\cdot$ Prompt Engineering $\cdot$ LLM Ops}
+
+  \vspace{0.6em}
+  \noindent\rule{0.92\textwidth}{0.4pt}
+  \vspace{1.0em}
+\end{center}
+]
+
+
+% ================================================================
+%  SECTION 1: INTRODUCTION
+% ================================================================
+\section{Introduction}\label{sec:intro}
+
+\subsection{Background and Motivation}
+
+The rapid evolution of Large Language Models (LLMs) has catalyzed the emergence of LLM-based autonomous Agents capable of sustained, multi-turn interaction across complex task domains~\cite{wang2024survey, yao2023react}. These Agents increasingly operate in \emph{long-horizon} scenarios---pair-programming sessions spanning hundreds of turns, multi-day customer support threads, and iterative research workflows---where the cumulative dialogue token count inevitably approaches and exceeds the model's effective context window $\Tmax$.
+
+While recent advances have expanded context windows to 128K tokens and beyond~\cite{team2024gemini, chen2023extending}, the fundamental constraint persists: there exists a hard upper bound on the number of tokens that can be processed in a single inference call. When this bound is reached, the orchestration layer must intervene to \emph{compact} the context---a process that is both necessary and fraught with information-theoretic trade-offs.
+
+The dominant approach to context compaction in production Agent systems relies on \emph{synchronous summarization}: when $\Dtok(\mathcal{C}_t) \geq \Ttrig$, the system blocks inference, invokes the LLM to produce a compressed summary of the full conversational history, and atomically replaces the context with this summary before resuming~\cite{chase2022langchain, packer2023memgpt}. This ``trigger-compress-replace'' pipeline, while conceptually straightforward, introduces a critical failure mode that we term the \emph{Memory Cliff}.
+
+\subsection{The Memory Cliff Problem}\label{sec:cliff_problem}
+
+\begin{definition}[Memory Cliff]\label{def:cliff}
+  A \emph{Memory Cliff} is the abrupt degradation in an Agent's ability to recall and utilize fine-grained conversational details that occurs at the turn immediately following a synchronous context compaction event.
+\end{definition}
+
+The Memory Cliff manifests through two concurrent pathologies:
+
+\textbf{(1) Information loss in recent turns.} Synchronous summarization compresses the \emph{entire} history---including the most recent exchanges---into a lossy abstract. Fine-grained details such as specific variable names, numerical thresholds, conditional constraints, and user preferences are statistically unlikely to survive compression, even when they are critical to the immediately ongoing sub-task.
+
+\textbf{(2) Inference blocking.} The synchronous compaction call blocks the front-end inference pipeline for the duration of the summarization, introducing a user-perceivable latency spike of 10--15 seconds for typical 100K-token histories. This violates the responsiveness expectations of interactive Agent applications.
+
+We illustrate this with a motivating example. Consider a pair-programming Agent that has spent 45 turns co-developing a REST API. At turn 46, the token count reaches the threshold, triggering compaction. If the summary reduces the full 100K-token history to a short abstract, specific details such as a \texttt{TokenPayload} dataclass definition or authentication middleware configuration may be omitted. At turn 47, when the user asks the Agent to ``use the same auth types we defined earlier,'' the Agent may lack the exact information needed to continue safely.
+
+This example is not itself evidence of prevalence. It motivates a measurable failure mode: entity and fact recall should be evaluated immediately before and after compaction, with raw transcripts, probe questions, and judge decisions preserved for audit. \Cref{sec:experiments} defines an evaluation protocol for measuring this effect.
+
+\subsection{Key Insight and Proposed Approach}\label{sec:insight}
+
+Our key insight is that the temporal coupling between context compaction and front-end inference is \emph{unnecessary}. Drawing from the classical \emph{double buffering} paradigm in operating systems and computer graphics~\cite{tanenbaum2015modern}---where a back buffer is prepared asynchronously while the front buffer continues to serve the active rendering pipeline---we propose to \emph{decouple} the compaction process from the inference path.
+
+We introduce \sys{}\footnote{This manuscript currently includes the design specification and illustrative reference code. Reproducible benchmarks require separate task instances, logs, annotations, and analysis scripts.}, a framework that maintains two logically distinct context representations: a \emph{Global Buffer} $\bufG$ containing the full history (including compressed summaries of earlier exchanges) and a \emph{Local Sliding Window Buffer} $\bufL$ that retains the most recent $k$ turns in verbatim form. When compaction is triggered, the system \emph{immediately} switches to $\bufL$ for front-end inference while a background process asynchronously generates a compressed summary of the historical prefix. Upon completion, a \emph{Smooth Transition Stitching Protocol} (STSP) reconciles the new summary with the dialogue accumulated during the transition, seamlessly restoring global mode. The entire mechanism operates at the application orchestration layer and requires \emph{no model fine-tuning or architectural modification}.
+
+\subsection{Contributions}
+
+This paper makes the following contributions:
+
+\begin{enumerate}
+  \item \textbf{Dual-Buffer Async Compaction Architecture (DBAC).}
+  We propose the first context management framework that decouples compaction from inference through an asynchronous dual-buffer switching architecture, drawing a novel connection between OS-level double buffering and LLM context management (\cref{sec:method}).
+
+  \item \textbf{Smooth Transition Stitching Protocol (STSP).}
+  We design a formal state-machine model and a stitching protocol that ensures semantic continuity across the compaction boundary, with provable safety (no memory vacuum) and liveness (guaranteed return to steady state) properties (\cref{sec:state,sec:stsp}).
+
+  \item \textbf{Application-Layer Implementation and Evaluation Protocol.}
+  We specify the orchestration-layer requirements, provide an implementation blueprint, and define benchmark tasks, metrics, logging artifacts, and statistical tests needed to validate the approach without relying on unverifiable aggregate claims (\cref{sec:experiments}).
+\end{enumerate}
+
+The remainder of this paper is organized as follows. \Cref{sec:related} surveys related work. \Cref{sec:method} presents the \sys{} framework in detail. \Cref{sec:experiments} reports experimental results. \Cref{sec:discussion} discusses implications and limitations, and \cref{sec:conclusion} concludes.
+
+
+% ================================================================
+%  SECTION 2: RELATED WORK
+% ================================================================
+\section{Related Work}\label{sec:related}
+
+\subsection{Context Window Management for LLMs}
+
+The finite context window of transformer-based LLMs~\cite{vaswani2017attention} has motivated extensive research on efficient context utilization. \emph{Fixed-window truncation} is the simplest approach, discarding tokens beyond the window limit on a first-in-first-out basis. While computationally trivial, this approach sacrifices all historical context beyond the window boundary.
+
+\emph{Sliding window attention} mechanisms operate at the model architecture level, allowing each token to attend only to a local neighborhood~\cite{beltagy2020longformer}. StreamingLLM~\cite{xiao2024efficient} extends this by preserving \emph{attention sinks}---a small number of initial tokens that stabilize attention distributions in streaming settings. Parallel Context Windows~\cite{ratner2023parallel} partition long contexts into parallel segments processed independently. These approaches are complementary to ours: they modify the model's attention pattern, whereas \sys{} operates at the prompt-assembly layer and is model-agnostic.
+
+Positional interpolation~\cite{chen2023extending} and rotary position embeddings~\cite{su2024roformer} extend effective context lengths at the model level but do not eliminate the fundamental need for context management in unbounded-length conversations. Recent work~\cite{hsieh2024ruler} demonstrates that effective context utilization often falls significantly below the nominal context window size, further motivating application-layer management strategies.
+
+\subsection{Context Compression and Summarization}
+
+A parallel line of work addresses context length through \emph{prompt compression}. LLMLingua~\cite{jiang2023llmlingua} and its successor LongLLMLingua~\cite{jiang2024longllmlingua} use token-level perplexity scoring to selectively prune low-salience tokens from prompts. RECOMP~\cite{xu2024recomp} trains extractive and abstractive compressors to reduce retrieved document context. AutoCompressor~\cite{chevalier2023adapting} fine-tunes language models to produce compact ``summary vectors'' that represent long contexts. Li~\etal~\cite{li2023compressing} propose selective context compression based on lexical unit self-information.
+
+These methods focus on compressing a given context \emph{before} a single inference call. They do not address the \emph{temporal dynamics} of when and how to invoke compression during an ongoing multi-turn conversation---precisely the problem \sys{} targets. Our framework is compatible with any of these compression backends; the contribution lies in the \emph{orchestration} strategy, not the compression mechanism itself.
+
+\subsection{Memory Architectures for LLM Agents}
+
+The design of explicit memory systems for LLM Agents has received growing attention. MemGPT~\cite{packer2023memgpt} draws an analogy to operating system virtual memory, implementing a paging mechanism that moves context segments between ``main memory'' (the context window) and ``disk'' (external storage). Generative Agents~\cite{park2023generative} maintain a memory stream of observations with reflection and retrieval capabilities. Reflexion~\cite{shinn2023reflexion} uses linguistic self-reflection as an episodic memory signal to improve agent behavior. MemLLM~\cite{modarressi2024memllm} fine-tunes LLMs with explicit read-write memory modules. Wang~\etal~\cite{wang2024augmenting} augment language models with retrieval-based long-term memory.
+
+Recent surveys~\cite{zhang2024survey} categorize Agent memory into working memory (the active context window) and long-term memory (external stores accessed via retrieval). \sys{} contributes to the \emph{working memory management} layer: it governs how the context window is maintained and refreshed during live operation. Our approach is complementary to long-term memory architectures and can be composed with retrieval-augmented systems (\cref{sec:discussion}).
+
+\subsection{Retrieval-Augmented Generation as Memory}
+
+Retrieval-Augmented Generation (RAG)~\cite{lewis2020retrieval, gao2024retrieval} offers an alternative memory paradigm: historical dialogue turns are evicted from the context window and indexed in a vector store, then retrieved on-demand based on semantic similarity to the current query. While RAG provides theoretically unbounded memory capacity, it introduces two limitations that \sys{} avoids: (1)~retrieval latency, which scales with corpus size and degrades interactive responsiveness, and (2)~\emph{retrieval confusion}, where semantically similar but temporally distinct passages are conflated, producing stale or contradictory context~\cite{liu2024lost}. Li~\etal~\cite{li2024long} further demonstrate that LLMs struggle with long in-context learning, compounding the challenge of integrating retrieved chunks coherently.
+
+\subsection{Concurrent and Asynchronous Patterns in LLM Systems}
+
+The application of concurrent systems design to LLM infrastructure remains underexplored. While multi-Agent orchestration frameworks~\cite{wu2023autogen} employ asynchronous message passing between Agents, many practical intra-Agent memory pipelines still treat summarization as a blocking maintenance step. Classical systems concepts such as double buffering, producer-consumer patterns, and non-blocking I/O~\cite{tanenbaum2015modern, lamport1978time} provide useful design vocabulary for the LLM context management problem. \sys{} applies these paradigms to the Agent memory layer.
+
+\subsection{Research Gap}
+
+Existing work addresses \emph{what} to compress (compression methods), \emph{where} to store (memory architectures), and \emph{how} to recall (retrieval strategies), but no prior work addresses the \emph{transition dynamics} of the compaction event itself---how to manage the critical interval between triggering compaction and completing it. \sys{} fills this gap by treating the compaction transition as a first-class system state with formally specified behavior.
+
+
+% ================================================================
+%  SECTION 3: METHODOLOGY
+% ================================================================
+\section{Methodology: The \sys{} Framework}\label{sec:method}
+
+\subsection{Problem Formulation}\label{sec:formulation}
+
+Consider a multi-turn dialogue between a user and an LLM-based Agent. Let the dialogue up to turn $t$ be denoted:
+\begin{equation}\label{eq:dialogue}
+  \mathcal{D}_t = \bigl\{(u_1, r_1),\; (u_2, r_2),\; \ldots,\; (u_t, r_t)\bigr\}
+\end{equation}
+where $u_i$ and $r_i$ represent the user utterance and agent response at turn $i$. We define a token counting function $\Dtok(\cdot)$ mapping any text sequence to its token count under the target model's tokenizer. The system operates under the hard constraint $\Dtok(\mathcal{C}_t) \leq \Tmax$, where $\mathcal{C}_t$ is the full prompt assembled at turn $t$ and $\Tmax$ is the effective context window budget (accounting for the reserved output token allocation).
+
+We formalize the Memory Cliff as an information discontinuity at the compaction boundary:
+\begin{equation}\label{eq:cliff}
+  \Delta_{\mathrm{cliff}} = \mathcal{I}(\mathcal{C}_{t^{-}}) - \mathcal{I}(\mathcal{C}_{t^{+}})
+\end{equation}
+where $\mathcal{I}(\cdot)$ is an information-content measure (operationalized as entity/fact recall in \cref{sec:metrics}) and $t^{-}, t^{+}$ denote the turns immediately before and after compaction. The design objective of \sys{} is:
+\begin{equation}\label{eq:objective}
+  \min_{\text{strategy}} \; \Delta_{\mathrm{cliff}} \quad \text{s.t.} \quad \Dtok(\mathcal{C}_t) \leq \Tmax, \; \forall\, t
+\end{equation}
+
+\subsection{System Architecture Overview}\label{sec:architecture}
+
+\sys{} maintains two logically distinct context representations that cooperate through a state-transition protocol:
+
+\begin{definition}[Global Context Buffer]\label{def:global}
+  The \emph{Global Buffer} $\bufG$ is the primary context representation used during normal operation. At turn $t$, it is defined as:
+  \begin{equation}\label{eq:bufg}
+    \bufG^{(t)} = \bigl[\, \psys \concat \mathcal{S}_{< t_0} \concat \mathcal{H}_{[t_0, t]} \,\bigr]
+  \end{equation}
+  where $\psys$ denotes the system prompt, $\mathcal{S}_{< t_0}$ denotes the compressed summary of all dialogue prior to some historical checkpoint $t_0$, $\mathcal{H}_{[t_0, t]}$ denotes the verbatim dialogue history from turn $t_0$ to $t$, and $\concat$ denotes ordered concatenation.
+\end{definition}
+
+\begin{definition}[Local Sliding Window Buffer]\label{def:local}
+  The \emph{Local Sliding Window Buffer} $\bufL$ is an auxiliary context representation activated exclusively during the asynchronous compaction phase. It retains only the most recent $k$ turns:
+  \begin{equation}\label{eq:bufl}
+    \bufL^{(t)} = \bigl[\, \psys \concat \Omega_{\mathrm{bridge}} \concat \mathcal{H}_{[t-k+1,\, t]} \,\bigr]
+  \end{equation}
+  where $k$ is the sliding window size (typically $3 \leq k \leq 5$) and $\Omega_{\mathrm{bridge}}$ is a \emph{Transition Bridge Prompt}---a structured meta-instruction informing the model of the ongoing context transition (detailed in \cref{sec:prompt}).
+\end{definition}
+
+\begin{definition}[Compaction Trigger Threshold]\label{def:trigger}
+  Compaction is initiated when $\Dtok(\bufG^{(t)}) \geq \Ttrig$, where $\Ttrig < \Tmax$. The \emph{safety margin} $\delta = \Tmax - \Ttrig$ ensures that the system can accommodate at least $\lceil \delta / \bar{\Dtok}_{\mathrm{turn}} \rceil$ additional turns (where $\bar{\Dtok}_{\mathrm{turn}}$ is the average token count per turn) before reaching the hard limit.
+\end{definition}
+
+The framework comprises four principal components that collaborate through clearly defined interfaces: the \emph{Transition Controller} (a finite-state automaton governing mode switching, \cref{sec:state}), the \emph{Async Compaction Engine} (background summarizer, \cref{sec:compaction}), the \emph{Prompt Orchestration Layer} (separation token injection, \cref{sec:prompt}), and the two buffers defined above. \Cref{fig:architecture} illustrates the component architecture.
+
+\begin{figure*}[t]
+\centering
+\small
+\begin{verbatim}
++------------------------------------------------------------------+
+|                    SmoothContext Orchestrator                     |
+|  +------------------------------------------------------------+  |
+|  |              Transition Controller (Sec. 3.3)               |  |
+|  |         [ State Machine: GLOBAL <-> TRANS <-> STITCH ]      |  |
+|  +-------------+------------------------------+----------------+  |
+|                |                              |                   |
+|                v                              v                   |
+|  +----------------------+     +------------------------------+    |
+|  |  Global Buffer B_G   |     |  Async Compaction Engine      |    |
+|  |  ~~~~~~~~~~~~~~~~    |     |  ~~~~~~~~~~~~~~~~~~~~~~~~     |    |
+|  |  - System Prompt     |     |  - Snapshot Manager           |    |
+|  |  - Early Summary     |<--->|  - Background LLM Summarizer  |    |
+|  |  - Full History      |     |  - Quality Self-Verifier      |    |
+|  +----------------------+     +------------------------------+    |
+|                |                              |                   |
+|                v                              |                   |
+|  +----------------------+    +-------------------------------+    |
+|  |  Local Buffer B_L    |--->| Prompt Orchestration Layer    |    |
+|  |  ~~~~~~~~~~~~~~~~    |    | ~~~~~~~~~~~~~~~~~~~~~~~~~~    |    |
+|  |  - System Prompt     |    | - Separation Token Injection  |    |
+|  |  - Bridge Prompt     |    | - Semantic Boundary Markers   |    |
+|  |  - Window H[t-k,t]   |    | - Role-Prefixed Structuring   |    |
+|  +----------------------+    +-------------------------------+    |
++------------------------------------------------------------------+
+                                               |
+                                               v
+                                    +-----------------+
+                                    | Target LLM API  |
+                                    |   (Black-Box)   |
+                                    +-----------------+
+\end{verbatim}
+\caption{High-level component architecture of the \sys{} framework. All components operate within the application orchestration layer, interacting with the target LLM exclusively through its standard chat/completion API. No model modification or fine-tuning is required.}
+\label{fig:architecture}
+\end{figure*}
+
+\subsection{Three-State Transition Mechanism}\label{sec:state}
+
+We model the \sys{} system as a deterministic finite automaton $\mathcal{A} = (Q, \Sigma, \delta, q_0, F)$, where:
+\begin{itemize}
+  \item $Q = \{S_{\textsc{global}},\; S_{\textsc{trans}},\; S_{\textsc{stitch}}\}$ is the set of states;
+  \item $\Sigma = \{\texttt{TRIGGER},\; \texttt{DONE},\; \texttt{MERGED},\; \texttt{TIMEOUT},\; \texttt{FALLBACK}\}$ is the input alphabet;
+  \item $\delta: Q \times \Sigma \rightarrow Q$ is the transition function;
+  \item $q_0 = S_{\textsc{global}}$ is the initial state;
+  \item $F = \{S_{\textsc{global}}\}$ is the set of accepting (steady) states.
+\end{itemize}
+
+\textbf{State $S_{\textsc{global}}$ (Global Mode --- Steady State).} The default operating mode. The Agent constructs its context from the Global Buffer $\bufG$, which contains the complete available history (possibly including earlier summaries). At each turn, the system monitors $\Dtok(\bufG^{(t)})$ against $\Ttrig$. All dialogue turns are appended to $\bufG$ in their verbatim form. This state represents the highest-fidelity operating mode and is the target state to which the system always seeks to return.
+
+\textbf{State $S_{\textsc{trans}}$ (Transition Mode --- Asynchronous Buffering).} Upon the \texttt{TRIGGER} event, the system enters Transition Mode. In this state, two concurrent processes execute:
+
+\begin{enumerate}
+  \item \emph{Front-end path}: The Agent switches to using the Local Sliding Window Buffer $\bufL$ for all inference calls. The sliding window maintains the most recent $k$ turns in full fidelity, ensuring that the user's immediate conversational context suffers no degradation. New dialogue turns during this phase are appended to $\bufL$ and simultaneously logged to a \emph{transition ledger} $\mathcal{L}_{\mathrm{trans}}$ for later reconciliation.
+
+  \item \emph{Back-end path}: The Async Compaction Engine operates on a frozen snapshot of the dialogue prefix $\mathcal{H}_{[1, t_{\mathrm{split}}]}$, producing a compressed summary $\mathcal{S}_{\mathrm{new}}$. This process is entirely decoupled from front-end inference and may span multiple dialogue turns.
+\end{enumerate}
+
+\textbf{State $S_{\textsc{stitch}}$ (Stitching Mode --- Reconstruction).} When the asynchronous compaction completes, the system enters Stitching Mode to merge the newly produced summary with the dialogue accumulated during the transition phase. This state executes the Smooth Transition Stitching Protocol (STSP, detailed in \cref{sec:stsp}) and is designed to be transient---typically completing within a single turn's processing cycle before returning to $S_{\textsc{global}}$.
+
+The complete transition function $\delta$ is specified in \cref{tab:transitions}.
+
+\begin{table}[h]
+\centering
+\caption{State transition function $\delta$ of the \sys{} automaton. All other $(q, \sigma)$ pairs are undefined and treated as no-ops.}
+\label{tab:transitions}
+\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+\textbf{Current State} & \textbf{Event} & \textbf{Next State} \\
+\midrule
+$S_{\textsc{global}}$ & \texttt{TRIGGER} & $S_{\textsc{trans}}$ \\
+$S_{\textsc{trans}}$ & \texttt{DONE} & $S_{\textsc{stitch}}$ \\
+$S_{\textsc{trans}}$ & \texttt{TIMEOUT} & $S_{\textsc{global}}$ \\
+$S_{\textsc{stitch}}$ & \texttt{MERGED} & $S_{\textsc{global}}$ \\
+$S_{\textsc{stitch}}$ & \texttt{FALLBACK} & $S_{\textsc{global}}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+We establish two essential formal properties of the automaton:
+
+\begin{property}[Safety --- No Memory Vacuum]\label{prop:safety}
+  At every turn $t$, regardless of the current state $q \in Q$, there exists a well-defined context buffer $\mathcal{B}^{(t)}$ such that $\Dtok(\mathcal{B}^{(t)}) \leq \Tmax$ and $\mathcal{B}^{(t)}$ contains at least the most recent $\min(k, t)$ turns in verbatim form.
+\end{property}
+
+\begin{property}[Liveness --- Guaranteed Return to Steady State]\label{prop:liveness}
+  For any execution trace starting from $S_{\textsc{global}}$, the system is guaranteed to return to $S_{\textsc{global}}$ within at most 3 transitions, bounded by wall-clock timeout $T_{\mathrm{timeout}}$ plus the configured stitching bound.
+\end{property}
+
+\textit{Proof.} From $S_{\textsc{global}}$, the sole outgoing transition leads to $S_{\textsc{trans}}$. From $S_{\textsc{trans}}$, either \texttt{DONE} fires (leading to $S_{\textsc{stitch}} \rightarrow S_{\textsc{global}}$ via \texttt{MERGED} or \texttt{FALLBACK}) or \texttt{TIMEOUT} fires (leading directly to $S_{\textsc{global}}$). From $S_{\textsc{stitch}}$, both outgoing transitions lead to $S_{\textsc{global}}$. The timeout $T_{\mathrm{timeout}}$ guarantees event arrival, bounding the maximum dwell time in $S_{\textsc{trans}}$. Hence, every path returns to $S_{\textsc{global}}$ in at most 3 transitions. The full proof is deferred to \cref{app:liveness}. $\square$
+
+\subsubsection{Asymmetric Context Switching.}\label{sec:asymmetric}
+
+A critical design feature is the \emph{asymmetry} between the forward and return switches. The forward switch ($S_{\textsc{global}} \rightarrow S_{\textsc{trans}}$) is \emph{instantaneous and non-blocking}: it merely redirects prompt assembly from $\bufG$ to $\bufL$ and injects the Transition Bridge Prompt $\Omega_{\mathrm{bridge}}$. No LLM call is required for the switch itself. From the user's perspective, the Agent continues to respond without perceptible interruption. The information loss is graceful: the model temporarily loses access to early dialogue history but retains full fidelity over the most recent $k$ turns, which are statistically the most relevant to the current conversational trajectory.
+
+The return switch ($S_{\textsc{stitch}} \rightarrow S_{\textsc{global}}$) is \emph{asynchronous and content-dependent}: it requires the completion of the STSP protocol, which must reconcile two potentially overlapping information sources. This asymmetry is fundamental---degradation is fast and deterministic, while reconstruction is slower but produces a higher-quality context representation.
+
+\subsubsection{Cascading Trigger Handling.}\label{sec:cascading}
+
+A non-trivial edge case arises when the sliding window buffer $\bufL$ itself approaches token limits during an extended transition phase (\eg, due to unusually slow compaction). We handle this through a \emph{cascading eviction policy}: if $\Dtok(\bufL^{(t)}) \geq T_{\mathrm{trigger}}^{(L)}$ while in $S_{\textsc{trans}}$, the oldest turns within the sliding window are evicted on a FIFO basis, maintaining the invariant that the $k_{\min}$ most recent turns (where $k_{\min} \leq k$, typically $k_{\min} = 2$) are always preserved. Evicted turns remain in the transition ledger $\mathcal{L}_{\mathrm{trans}}$ and are reconciled during the stitching phase.
+
+\subsection{Asynchronous Compaction Engine}\label{sec:compaction}
+
+Upon the \texttt{TRIGGER} event, the Async Compaction Engine executes the following initialization sequence:
+
+\textbf{(1) Split point determination.} Compute $t_{\mathrm{split}}$ as the turn index that partitions $\bufG^{(t)}$ into a compaction target and a retention zone:
+\begin{equation}\label{eq:split}
+  t_{\mathrm{split}} = \arg\min_{t'} \;\bigl\{\; t' \;\;\big|\;\; \Dtok\bigl(\mathcal{H}_{[1, t']}\bigr) \geq \alpha \cdot \Dtok\bigl(\mathcal{H}_{[1, t]}\bigr) \;\bigr\}
+\end{equation}
+where $\alpha \in (0.5, 0.8]$ is the \emph{compaction ratio}, controlling what fraction of the history is compressed. Higher $\alpha$ yields more aggressive compression but risks greater information loss.
+
+\textbf{(2) Snapshot capture.} Create an immutable deep copy $\hat{\mathcal{H}} = \text{freeze}\bigl(\mathcal{H}_{[1, t_{\mathrm{split}}]}\bigr)$. This snapshot is decoupled from the live dialogue state, ensuring that subsequent turns do not corrupt the compaction input.
+
+\textbf{(3) Background summarization.} Invoke the target LLM (or a designated smaller model) with a structured summarization prompt:
+\begin{equation}\label{eq:compress}
+  \mathcal{S}_{\mathrm{new}} = \mathrm{LLM}_{\mathrm{compress}}\bigl(\mathcal{P}_{\mathrm{compress}} \concat \hat{\mathcal{H}}\bigr)
+\end{equation}
+where $\mathcal{P}_{\mathrm{compress}}$ is a summarization instruction prompt specifying the desired compression ratio, key entity preservation requirements, and output format constraints (see \cref{app:prompts}). The summarization is executed in a background thread (or async coroutine), allowing the front-end inference loop to continue unimpeded.
+
+\textbf{(4) Optional self-verification.} A quality-assurance step queries the same or a separate LLM to verify factual consistency between $\mathcal{S}_{\mathrm{new}}$ and $\hat{\mathcal{H}}$ using an NLI-inspired entailment check~\cite{laban2022summac, min2023factscore}. If the entailment score falls below a threshold, the summary is regenerated.
+
+\textbf{(5) Timeout handling.} The compaction engine operates under a wall-clock timeout $T_{\mathrm{timeout}}$ (default: 60 seconds). If summarization exceeds this bound, the \texttt{TIMEOUT} event fires, triggering a fallback path using a lightweight extractive summary (first and last $m$ turns of $\hat{\mathcal{H}}$ plus key entity extraction).
+
+\subsection{Context Prompt Orchestration}\label{sec:prompt}
+
+\subsubsection{The Semantic Boundary Problem.}
+
+When \sys{} assembles a prompt from heterogeneous sources---system instructions, compressed summaries, transition bridge directives, and verbatim dialogue---the target LLM faces a non-trivial interpretation challenge. Without explicit structural cues, the model may conflate information across semantic boundaries~\cite{shi2023large}, leading to three failure modes: (1)~\emph{summary-as-dialogue confusion}, where summary text is interpreted as literal utterances; (2)~\emph{temporal ordering ambiguity}, where the model loses chronological awareness; and (3)~\emph{instruction-content blending}, where meta-level transition instructions are treated as conversational content.
+
+\subsubsection{System Separation Tokens.}
+
+To address these failure modes, we introduce \emph{System Separation Tokens} (SSTs)---structured delimiters injected at semantic boundaries:
+\begin{equation}\label{eq:sst}
+  \sigma_i = \texttt{[SEG:}\;\mathit{type}_i\;\texttt{|}\;\mathit{scope}_i\;\texttt{|}\;\mathit{temporal}_i\;\texttt{]}
+\end{equation}
+where $\mathit{type} \in \{\texttt{SYSTEM}, \texttt{SUMMARY}, \texttt{BRIDGE}, \texttt{HISTORY}, \texttt{WINDOW}\}$ indicates the semantic category, $\mathit{scope}$ encodes temporal coverage (\eg, \texttt{turns:1-45}), and $\mathit{temporal} \in \{\texttt{ARCHIVAL}, \texttt{RECENT}, \texttt{LIVE}\}$ signals recency.
+
+The theoretical justification rests on two well-established properties of transformer-based LLMs:
+
+\textbf{(a) Positional attention anchoring.} Research on positional encodings and attention patterns~\cite{press2022train, su2024roformer} demonstrates that structurally distinctive token sequences serve as \emph{attention anchors}---positions to which attention heads preferentially attend when resolving long-range dependencies.
+
+\textbf{(b) In-context format compliance.} Large language models exhibit strong sensitivity to formatting conventions encountered during instruction tuning~\cite{wei2022finetuned, ouyang2022training}. SSTs present segment boundaries in markup-style format, which instruction-tuned models have been trained to respect as meta-level annotations.
+
+The total token overhead is bounded by $\Delta\Dtok_{\mathrm{SST}} \leq 25 \cdot n_{\mathrm{seg}} \leq 100$ tokens---a negligible fraction ($< 0.1\%$) of typical 128K-token context windows.
+
+\subsubsection{Transition Bridge Prompt.}\label{sec:bridge}
+
+The bridge prompt $\Omega_{\mathrm{bridge}}$ must satisfy two competing objectives: (i) convey sufficient meta-information for the model to understand that early history is temporarily unavailable, and (ii) do so without inducing the model to discuss memory limitations. It follows three design principles:
+\begin{enumerate}
+  \item \emph{Positive framing}: ``You are continuing an ongoing conversation'' rather than ``You have lost access to history.''
+  \item \emph{Behavioral anchoring}: Explicit instructions for handling user references to unavailable history (``acknowledge it naturally and proceed'').
+  \item \emph{Meta-silence}: ``Do not mention any internal memory or context limitations.''
+\end{enumerate}
+
+The complete prompt template is provided in \cref{app:prompts}.
+
+\subsection{Smooth Transition Stitching Protocol}\label{sec:stsp}
+
+Upon receipt of the completed summary $\mathcal{S}_{\mathrm{new}}$, the STSP must reconcile three information sources: the summary (covering turns $[1, t_{\mathrm{split}}]$), the transition ledger $\mathcal{L}_{\mathrm{trans}}$ (covering turns $[t_{\mathrm{split}}+1, t_{\mathrm{current}}]$), and the current sliding window (a subset of $\mathcal{L}_{\mathrm{trans}}$).
+
+The challenge lies in ensuring \emph{semantic continuity} at the junction between $\mathcal{S}_{\mathrm{new}}$ and $\mathcal{L}_{\mathrm{trans}}$, as the summary's final sentences may overlap with or contradict the ledger's initial entries. The protocol operates in four phases, formalized in \cref{alg:stsp}:
+
+\begin{algorithm}[t]
+\caption{Smooth Transition Stitching Protocol (STSP)}
+\label{alg:stsp}
+\KwIn{$\mathcal{S}_{\mathrm{new}}$, $\mathcal{L}_{\mathrm{trans}}$, $\psys$, $\Tmax$}
+\KwOut{$(\bufG^{(\mathrm{new})}, e)$ where $e \in \{\texttt{MERGED}, \texttt{FALLBACK}\}$}
+$e \leftarrow \texttt{MERGED}$\;
+\tcp{Phase 1: Semantic Overlap Detection}
+$\mathit{tail} \leftarrow \text{ExtractTail}(\mathcal{S}_{\mathrm{new}}, n{=}3)$\;
+$\mathit{head} \leftarrow \text{ExtractHead}(\mathcal{L}_{\mathrm{trans}}, n{=}2)$\;
+$\mathit{ov} \leftarrow \text{CosineSim}(\mathit{tail}, \mathit{head})$\;
+\tcp{Phase 2: Dedup \& Conflict Resolution}
+\eIf{$\mathit{ov} > \theta_{\mathrm{overlap}}$}{
+  $\mathcal{S}' \leftarrow \text{TrimOverlap}(\mathcal{S}_{\mathrm{new}}, \mathit{ov})$\;
+}{
+  $\mathcal{S}' \leftarrow \mathcal{S}_{\mathrm{new}}$\;
+}
+$\mathit{conf} \leftarrow \text{DetectConflicts}(\mathcal{S}', \mathcal{L}_{\mathrm{trans}})$\;
+\If{$\mathit{conf} \neq \varnothing$}{
+  \tcp{Verbatim takes precedence over summary}
+  $\mathcal{S}' \leftarrow \text{Resolve}(\mathcal{S}', \mathit{conf}, \textsc{PreferVerbatim})$\;
+}
+\tcp{Phase 3: Context Reassembly}
+$\Omega_s \leftarrow \text{GenStitchBridge}(\mathcal{S}', \mathcal{L}_{\mathrm{trans}})$\;
+$\bufG' \leftarrow [\psys \oplus \mathcal{S}' \oplus \Omega_s \oplus \mathcal{L}_{\mathrm{trans}}]$\;
+\tcp{Phase 4: Token Budget Enforcement}
+\If{$\Dtok(\bufG') > \Tmax$}{
+  $\mathcal{L}' \leftarrow \text{ProgressiveTrim}(\mathcal{L}_{\mathrm{trans}})$\;
+  $\bufG' \leftarrow [\psys \oplus \mathcal{S}' \oplus \Omega_s \oplus \mathcal{L}']$\;
+  \If{$\Dtok(\bufG') > \Tmax$}{
+    $\bufG' \leftarrow \text{ExtractiveFallback}(\psys, \mathcal{S}', \mathcal{L}_{\mathrm{trans}}, \Tmax)$\;
+    $e \leftarrow \texttt{FALLBACK}$\;
+  }
+}
+\textbf{emit} $e$\;
+\Return{$(\bufG', e)$}\;
+\end{algorithm}
+
+The semantic similarity computation employs a lightweight sentence transformer~\cite{reimers2019sentence} with threshold $\theta_{\mathrm{overlap}} = 0.75$. Conflict detection may use an LLM-as-judge approach~\cite{zheng2024judging} for factual consistency verification. In conflict resolution, verbatim dialogue always takes precedence over the compressed summary, as the original turns are the ground-truth information source.
+
+\subsection{Algorithmic Control Flow}\label{sec:algorithm}
+
+\Cref{alg:main} presents the complete \sys{} main orchestration loop.
+
+\begin{algorithm}[t]
+\caption{\sys{} --- Main Orchestration Loop}
+\label{alg:main}
+\KwIn{LLM client, config ($k, \alpha, \Ttrig, T_{\mathrm{timeout}}$)}
+Init.\ $\textit{state} \leftarrow S_{\textsc{global}}$, $\bufG$, $\bufL$, $\mathcal{L}_{\mathrm{trans}}$\;
+\ForEach{incoming user message $u_t$}{
+  \tcp{Context Assembly}
+  \uIf{$\textit{state} = S_{\textsc{global}}$}{
+    $\mathcal{C} \leftarrow \text{Assemble}(\bufG, u_t)$\;
+  }\Else{
+    $\mathcal{C} \leftarrow \text{Assemble}(\bufL, \Omega_{\mathrm{bridge}}, u_t)$\;
+  }
+  $r_t \leftarrow \text{LLM.Generate}(\mathcal{C})$\;
+  \tcp{Buffer Update}
+  \uIf{$\textit{state} = S_{\textsc{global}}$}{
+    $\bufG.\text{append}((u_t, r_t))$\;
+  }\Else{
+    $\bufL.\text{append}((u_t, r_t))$\;
+    $\mathcal{L}_{\mathrm{trans}}.\text{record}((u_t, r_t))$\;
+  }
+  \tcp{State Transition Evaluation}
+  \If{$\textit{state} = S_{\textsc{global}} \,\wedge\, \Dtok(\bufG) \geq \Ttrig$}{
+    $t_s \leftarrow \text{SplitPoint}(\bufG, \alpha)$\;
+    $\hat{\mathcal{H}} \leftarrow \text{Freeze}(\bufG, t_s)$\;
+    \textbf{async} $\text{Compact}(\hat{\mathcal{H}})$\;
+    $\bufL.\text{init}(\bufG.\text{recent}(k))$\;
+    $\textit{state} \leftarrow S_{\textsc{trans}}$\;
+  }
+  \If{$\textit{state} = S_{\textsc{trans}} \,\wedge\, \text{Compactor.done()}$}{
+    $(\bufG^{\!\mathrm{new}}, e) \leftarrow \text{STSP}(\mathcal{S}_{\mathrm{new}}, \mathcal{L}_{\mathrm{trans}})$\;
+    $\bufG \leftarrow \bufG^{\!\mathrm{new}}$\;
+    $\textit{state} \leftarrow S_{\textsc{global}}$\;
+  }
+  \If{$\textit{state} = S_{\textsc{trans}} \,\wedge\, \text{TimedOut}()$}{
+    FallbackRecovery()\;
+    $\textit{state} \leftarrow S_{\textsc{global}}$\;
+  }
+}
+\end{algorithm}
+
+\subsection{Implementation Considerations}\label{sec:impl}
+
+\subsubsection{Computational Complexity.}
+
+We analyze the per-turn overhead of \sys{} relative to a baseline system in \cref{tab:complexity}.
+
+\begin{table}[h]
+\centering
+\caption{Per-turn computational complexity analysis.}
+\label{tab:complexity}
+\small
+\begin{tabular}{@{}lccc@{}}
+\toprule
+\textbf{Operation} & \textbf{Baseline} & \textbf{Global} & \textbf{Trans.} \\
+\midrule
+Prompt Assembly   & $O(n)$     & $O(n)$     & $O(k)$ \\
+LLM Inference     & $O(n^2)$   & $O(n^2)$   & $O(k^2)$ \\
+Buffer Update     & $O(1)$     & $O(1)$     & $O(1)$ \\
+Bg. Compaction    & ---        & ---        & $O(n^2)_{\text{async}}$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+During Transition Mode, the front-end inference operates on $\bufL$ ($\Dtok(\bufL) \ll \Tmax$). This can reduce prompt assembly and prefill cost, but observed latency depends on provider batching, rate limits, network conditions, cache behavior, and whether compaction shares the same model or quota pool.
+
+\subsubsection{API Compatibility.}
+
+\sys{} requires three API capabilities: (a) arbitrary message sequence construction, (b) non-blocking or concurrently scheduled model calls, and (c) tokenizer-compatible pre-submission token counting. These capabilities are common across major LLM providers and open-source inference engines (vLLM, TGI, Ollama), but adapter implementations must account for provider-specific message formats, rate limits, streaming behavior, and token accounting.
+
+\subsubsection{Resource Isolation.}
+
+To prevent resource contention, we recommend: (1) separate API rate-limit pools for inference and compaction; (2) model tier separation (\eg, GPT-4o-mini for compaction, full GPT-4o for inference); or (3) Python \texttt{asyncio} task group isolation in single-process deployments.
+
+
+% ================================================================
+%  SECTION 4: EVALUATION PROTOCOL
+% ================================================================
+\section{Evaluation Protocol}\label{sec:experiments}
+
+This section specifies how \sys{} should be evaluated. The repository containing this manuscript does not include benchmark instances, model outputs, human annotations, or analysis scripts; therefore, this section intentionally avoids reporting numerical results.
+
+\subsection{Research Questions}
+
+An empirical study should address four research questions:
+\begin{itemize}
+  \item \textbf{RQ1:} Does \sys{} preserve task success across compaction boundaries better than synchronous summarization and retrieval-augmented memory?
+  \item \textbf{RQ2:} Does the dual-buffer architecture preserve recent-turn facts immediately after a trigger?
+  \item \textbf{RQ3:} What user-visible latency is introduced or removed by asynchronous switching under a fixed provider, model, quota, and deployment setup?
+  \item \textbf{RQ4:} Which components---asynchronous compaction, STSP, SSTs, and the bridge prompt---are necessary for observed improvements?
+\end{itemize}
+
+\subsection{Benchmark Tasks}\label{sec:benchmarks}
+
+\textbf{Task 1: CodeAgent-100K.} A multi-step code engineering task should span approximately 100K tokens across sequential sub-tasks: module design, API specification, implementation of interdependent modules, integration testing, and refactoring. Each instance requires a reference repository, executable tests, and a rubric of concrete correctness criteria. Compaction should be triggered at a recorded boundary where later implementation depends on earlier design decisions.
+
+\textbf{Task 2: KDQA-Long.} A knowledge-intensive QA task should run for 60--80 turns across several domains. Probe questions must be split into two audited groups: recent probes targeting the last $k$ turns for IIRA, and archival probes targeting early turns for long-range recall after stitching. Mixing these two groups would confound recent-window preservation with historical-summary quality.
+
+\textbf{Task 3: IFC-Stress.} An instruction-following continuity task should place persistent behavioral constraints near the beginning of the dialogue and evaluate whether the Agent follows them immediately after compaction and after returning to global mode. Constraints should be machine-checkable when possible and manually adjudicated only with a written rubric.
+
+\subsection{Compared Methods}\label{sec:baselines}
+
+A reproducible study should compare:
+\begin{itemize}
+  \item \textbf{Baseline-Summary (A):} synchronous compaction that blocks inference, summarizes the active history, and replaces the old context with the summary.
+  \item \textbf{Vector-RAG (B):} rolling eviction into a vector index, with fixed chunking, embedding model, top-$r$ retrieval, and recency tie-breaking rules.
+  \item \textbf{\sys{} (C):} the proposed asynchronous dual-buffer method, with all configuration values recorded: $k$, $\alpha$, $\theta_{\mathrm{overlap}}$, $\Ttrig$, $\Tmax$, and $T_{\mathrm{timeout}}$.
+\end{itemize}
+
+All methods must use identical task prompts, model identifiers, sampling parameters, output budgets, and provider accounts. The experiment log must record exact API model IDs, provider release or retirement status at the run date, tokenizer version, temperature, seed or determinism controls, retry policy, and rate-limit pool.
+
+\subsection{Metrics}\label{sec:metrics}
+
+\textbf{Task Success Rate (TSR).} The proportion of verifiable criteria satisfied:
+\begin{equation}\label{eq:tsr}
+  \text{TSR} = \frac{1}{N} \sum_{i=1}^{N} \frac{|\{c \in \mathcal{R}_i : \text{satisfied}(c, \hat{y}_i)\}|}{|\mathcal{R}_i|}
+\end{equation}
+where $N$ is the number of sessions, $\mathcal{R}_i$ is the rubric for session $i$, and $\hat{y}_i$ is the Agent's output.
+
+\textbf{Context Transition Latency (CTL).} User-visible latency at compaction boundaries:
+\begin{equation}\label{eq:ctl}
+  \text{CTL} = \bar{L}_{\text{boundary}} - \bar{L}_{\text{normal}} \quad \text{(milliseconds)}
+\end{equation}
+where $\bar{L}_{\text{boundary}}$ is the mean time-to-first-token for a fixed number of turns after trigger, and $\bar{L}_{\text{normal}}$ is the matched non-boundary TTFT for the same model and task. CTL must be reported with provider, network, streaming, caching, and rate-limit conditions.
+
+\textbf{Immediate Information Retrieval Accuracy (IIRA).} Recall of recent-turn details at post-compaction probes:
+\begin{equation}\label{eq:iira}
+  \text{IIRA} = \frac{1}{|\mathcal{Q}_{\mathrm{recent}}|} \sum_{q \in \mathcal{Q}_{\mathrm{recent}}} \mathbb{1}\bigl[\text{F1}(\hat{a}_q, a_q^{*}) \geq 0.7\bigr]
+\end{equation}
+where $\mathcal{Q}_{\mathrm{recent}}$ contains probes targeting facts from the most recent $k$ turns. Archival recall must be reported separately because it measures summary quality rather than sliding-window preservation.
+
+\subsection{Required Artifacts}
+
+\begin{table}[h]
+\centering
+\caption{Minimum artifacts required before reporting empirical results.}
+\label{tab:artifacts}
+\small
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Artifact} & \textbf{Purpose} \\
+\midrule
+Task instances & Reproduce prompts, turn boundaries, and trigger points \\
+Gold answers/rubrics & Audit TSR, IIRA, and archival recall scoring \\
+Model call logs & Verify model IDs, parameters, latency, token counts, retries \\
+Judge prompts & Reproduce automated grading decisions \\
+Human annotations & Validate judge reliability and disagreement handling \\
+Analysis scripts & Recompute aggregates, confidence intervals, and ablations \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Plan}\label{sec:ablation}
+
+The ablation study should independently disable asynchronous compaction, STSP, SSTs, and the transition bridge prompt. Window size should be varied over at least $k \in \{1,3,5,7,10\}$. Each ablation must use the same task instances and run order as the full system to isolate the effect of the removed component.
+
+\subsection{Qualitative Error Analysis}\label{sec:case_study}
+
+For each method, the study should include representative failures with the full prompt segment, retrieved or summarized context, model answer, gold answer, and scorer rationale. Qualitative examples must be clearly marked as examples, not aggregate evidence.
+
+
+% ================================================================
+%  SECTION 5: DISCUSSION
+% ================================================================
+\section{Discussion}\label{sec:discussion}
+
+\subsection{Practical Implications}
+
+\sys{} is designed for deployment in LLM Agent orchestration systems that can construct arbitrary message sequences and schedule background model calls. Its application-layer design avoids model fine-tuning, but it is not automatically a drop-in replacement for every framework. A production adapter must implement provider-specific token counting, message formatting, cancellation, timeout handling, and rate-limit isolation.
+
+The main engineering benefit is temporal decoupling: the user-facing path can continue while compaction proceeds in the background. Whether this improves latency in practice is an empirical question. A shorter transition prompt may reduce prefill work, while shared quotas, background summarization, or provider batching may offset that advantage.
+
+\subsection{Complementarity with Existing Approaches}
+
+\sys{} operates at the \emph{orchestration layer} and is orthogonal to techniques at other layers:
+
+\textbf{Model-level:} Sliding window attention~\cite{beltagy2020longformer}, attention sinks~\cite{xiao2024efficient}, and extended positional encodings~\cite{chen2023extending} modify attention mechanisms. \sys{} only controls prompt assembly and can be evaluated with or without such models.
+
+\textbf{Compression-level:} Advanced compressors~\cite{jiang2023llmlingua, chevalier2023adapting} can serve as the backend for the Async Compaction Engine, but the quality of $\mathcal{S}_{\mathrm{new}}$ remains a limiting factor for archival recall.
+
+\textbf{Memory-level:} External memory systems~\cite{packer2023memgpt, wang2024augmenting} provide long-term storage. \sys{} manages working memory and can be combined with retrieval for early-history queries during transition mode.
+
+\subsection{Cost Accounting}
+
+Cost must be measured from actual token logs rather than estimated tables. A complete report should separate input, output, cached input, embedding, judge, and compaction tokens; list the price sheet date; and include retries or failed calls. STSP and self-verification are not free: their cost depends on conflict rate, summary length, and whether they use the primary model or a cheaper verifier.
+
+\subsection{Limitations}
+
+\textbf{(1) Summary quality dependence.} The reconstructed global context depends on $\mathcal{S}_{\mathrm{new}}$. STSP can reduce overlap and conflict, but it cannot recover facts omitted from the summary unless they remain in the transition ledger or an external memory.
+
+\textbf{(2) Early reference during transition.} If a user references early-history details during transition mode, the Agent may not have those details in $\bufL$. The bridge prompt can guide behavior, but it does not solve the information gap.
+
+\textbf{(3) Resource contention.} Using the same provider account, model, or rate-limit pool for inference and compaction can degrade the user-facing path. Separate pools or model tiers should be evaluated rather than assumed.
+
+\textbf{(4) Token-budget edge cases.} Very large single turns can violate the assumption that the most recent $k$ turns fit in $\Tmax$. Implementations need hard truncation, refusal, or compression policies for pathological turns.
+
+\textbf{(5) Short conversations.} For dialogues that never approach $\Ttrig$, \sys{} adds monitoring complexity without benefit.
+
+\subsection{Future Directions}
+
+\textbf{Multi-level buffering.} Extend the dual-buffer design to a hierarchy with verbatim turns, detailed notes, and abstract summaries.
+
+\textbf{Predictive triggering.} Use dialogue velocity and topic shifts to start background summarization before the hard threshold is reached.
+
+\textbf{Hybrid \sys{}+RAG.} Add targeted retrieval for early-history queries during transition mode while preserving deterministic recent-turn fidelity.
+
+\textbf{Multi-Agent coordination.} Coordinate compaction schedules across Agents that share context or depend on each other's state.
+
+
+% ================================================================
+%  SECTION 6: CONCLUSION
+% ================================================================
+\section{Conclusion}\label{sec:conclusion}
+
+We presented \sys{}, an asynchronous dual-buffer context compression framework for LLM-based Agents. The framework decouples front-end inference from background compaction by maintaining a local sliding window during transition mode and stitching the resulting summary back together with transition-period dialogue.
+
+The contribution is architectural and methodological: DBAC defines the temporal decoupling strategy, STSP defines the reconstruction protocol, and the evaluation protocol specifies the artifacts required to test the approach. The design is implementable at the application orchestration layer, but performance claims require reproducible benchmark data and audited model logs.
+
+\sys{} should therefore be treated as a falsifiable systems proposal. Its expected advantage is strongest when recent-turn fidelity matters immediately after compaction and when background compaction can be isolated from the user-facing inference path. Its limitations are equally concrete: summary quality, early-history queries during transition mode, rate-limit contention, and token-budget edge cases remain open engineering risks.
+
+
+% ================================================================
+%  REFERENCES
+% ================================================================
+\bibliographystyle{plain}
+\bibliography{references}
+
+
+% ================================================================
+%  APPENDIX
+% ================================================================
+\clearpage
+\appendix
+
+\section{Proof of Safety Property}\label{app:safety}
+
+\begin{theorem}[Safety --- No Memory Vacuum]
+  Assume each accepted turn is bounded by a configured maximum turn budget and the implementation may reject, truncate, or summarize pathological single turns that cannot fit in $\Tmax$. At every turn $t$ in any execution of the \sys{} automaton, there exists a well-defined context buffer $\mathcal{B}^{(t)}$ such that (i)~$\Dtok(\mathcal{B}^{(t)}) \leq \Tmax$ and (ii)~$\mathcal{B}^{(t)}$ contains the most recent $\min(k_{\mathrm{eff}}, t)$ turns in verbatim form, where $1 \leq k_{\mathrm{eff}} \leq k$ is the largest suffix that fits the active token budget.
+\end{theorem}
+
+\begin{proof}
+  We proceed by case analysis on the automaton state at turn $t$.
+
+  \textbf{Case 1:} $\textit{state} = S_{\textsc{global}}$. The active buffer is $\bufG^{(t)}$. By the trigger condition, we have $\Dtok(\bufG^{(t)}) < \Ttrig < \Tmax$ before triggering, or $\Dtok(\bufG^{(t)}) \leq \Tmax$ immediately after STSP reconstruction. In either case, condition (i) is satisfied. The verbatim history $\mathcal{H}_{[t_0, t]}$ within $\bufG^{(t)}$ includes the recent suffix retained after the last compaction checkpoint, satisfying (ii) for the configured $k_{\mathrm{eff}}$.
+
+  \textbf{Case 2:} $\textit{state} = S_{\textsc{trans}}$. The active buffer is $\bufL^{(t)}$. By construction:
+  \begin{align}
+    \Dtok(\bufL^{(t)}) &= \Dtok(\psys) + \Dtok(\Omega_{\mathrm{bridge}}) \nonumber \\
+    &\quad + \sum_{i=t-k'+1}^{t} \Dtok(u_i, r_i)
+  \end{align}
+  where $k' = \min(k_{\mathrm{eff}}, |\text{window}|)$. The cascading eviction policy (\cref{sec:cascading}) reduces $k_{\mathrm{eff}}$ when the full window would violate the token budget, and pathological single turns are handled by the accepted-turn bound stated in the theorem. Thus condition (i) is satisfied. The sliding window $\mathcal{H}_{[t-k'+1, t]}$ explicitly contains the $k'$ most recent turns in verbatim form, satisfying (ii).
+
+  \textbf{Case 3:} $\textit{state} = S_{\textsc{stitch}}$. This is a transient state occurring during reconstruction. The STSP algorithm (\cref{alg:stsp}) checks $\Dtok(\bufG') \leq \Tmax$ and invokes progressive trimming or extractive fallback if the constraint would be violated. The trimming policy preserves the most recent suffix from $\mathcal{L}_{\mathrm{trans}}$, satisfying both (i) and (ii) for the resulting $k_{\mathrm{eff}}$.
+
+  Since the three cases are exhaustive over $Q$, the property holds for all reachable states. $\square$
+\end{proof}
+
+\begin{corollary}[Bounded Information Loss]
+  The information loss at any compaction boundary is bounded:
+  \begin{equation}
+    \Delta_{\mathrm{cliff}}^{(\sys{})} \leq \mathcal{I}\bigl(\mathcal{H}_{[1, t_{\mathrm{split}}]}\bigr) - \mathcal{I}\bigl(\mathcal{S}_{\mathrm{new}}\bigr)
+  \end{equation}
+  That is, lossy compression is confined to the compressed prefix and any budget-induced trimming. The retained recent suffix is preserved verbatim during the transition.
+\end{corollary}
+
+
+\section{Proof of Liveness Property}\label{app:liveness}
+
+\begin{theorem}[Liveness --- Guaranteed Return]
+  For any execution starting in $S_{\textsc{global}}$, the system returns to $S_{\textsc{global}}$ within at most 3 state transitions, with the total time bounded by $T_{\mathrm{timeout}} + T_{\mathrm{stitch}}$, where $T_{\mathrm{stitch}}$ is bounded by the maximum transition-ledger size accepted by the implementation.
+\end{theorem}
+
+\begin{proof}
+  We enumerate all maximal paths from $S_{\textsc{global}}$:
+
+  \textbf{Path 1:} $S_{\textsc{global}} \xrightarrow{\texttt{TRIGGER}} S_{\textsc{trans}} \xrightarrow{\texttt{DONE}} S_{\textsc{stitch}} \xrightarrow{\texttt{MERGED}} S_{\textsc{global}}$. This path involves 3 transitions and returns to $S_{\textsc{global}}$. The time in $S_{\textsc{trans}}$ is bounded by $T_{\mathrm{timeout}}$ (wall-clock guarantee). The time in $S_{\textsc{stitch}}$ is bounded by $T_{\mathrm{stitch}} = O(\Dtok(\mathcal{L}_{\mathrm{trans}}))$ under the configured maximum transition-ledger size.
+
+  \textbf{Path 2:} $S_{\textsc{global}} \xrightarrow{\texttt{TRIGGER}} S_{\textsc{trans}} \xrightarrow{\texttt{TIMEOUT}} S_{\textsc{global}}$. Returns in 2 transitions within $T_{\mathrm{timeout}}$.
+
+  \textbf{Path 3:} $S_{\textsc{global}} \xrightarrow{\texttt{TRIGGER}} S_{\textsc{trans}} \xrightarrow{\texttt{DONE}} S_{\textsc{stitch}} \xrightarrow{\texttt{FALLBACK}} S_{\textsc{global}}$. Similar to Path 1, returns in 3 transitions.
+
+  No path exists that does not return to $S_{\textsc{global}}$, as every state other than $S_{\textsc{global}}$ has at least one outgoing transition to $S_{\textsc{global}}$ (directly or transitively), and the timeout mechanism prevents infinite dwell in transition mode. $\square$
+\end{proof}
+
+
+\section{Sensitivity to Compaction Threshold}\label{app:threshold}
+
+\begin{table}[h]
+\centering
+\caption{Recommended sensitivity sweep for $\Ttrig / \Tmax$. Values are protocol settings, not results.}
+\label{tab:sensitivity}
+\small
+\begin{tabular}{@{}cll@{}}
+\toprule
+$\Ttrig / \Tmax$ & \textbf{Expected risk} & \textbf{Required measurement} \\
+\midrule
+0.60 & Frequent compaction & Summary loss and cost per session \\
+0.70 & Moderate margin & TSR, IIRA, archival recall, CTL \\
+0.78 & Candidate default & Same metrics with confidence intervals \\
+0.85 & Tight margin & Timeout and fallback rate \\
+0.92 & Cascading risk & Hard-limit violations and truncation rate \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Setting the threshold too low may cause unnecessary compaction and cumulative summarization loss. Setting it too high may leave insufficient safety margin $\delta$ and increase timeout, fallback, or truncation events. The default threshold should be chosen from measured task-level trade-offs rather than assumed in advance.
+
+
+\section{Prompt Templates}\label{app:prompts}
+
+\subsection{Summarization Prompt $\mathcal{P}_{\mathrm{compress}}$}
+
+\begin{lstlisting}[language={},basicstyle=\ttfamily\scriptsize]
+You are a precise conversation summarizer.
+Summarize the following multi-turn dialogue,
+preserving ALL of the following:
+1. Named entities (people, tools, files,
+   functions, variables, class names)
+2. Numerical values and thresholds
+3. Conditional logic and constraints
+4. Decisions made and their rationale
+5. The temporal ordering of events
+6. User preferences and behavioral requests
+
+Format the summary as a structured narrative
+with chronological sections. Each section
+should correspond to a coherent phase of the
+conversation. Maintain factual precision over
+brevity. Use exact names and values.
+
+=== DIALOGUE TO SUMMARIZE ===
+{dialogue_content}
+\end{lstlisting}
+
+\subsection{Transition Bridge Prompt $\Omega_{\mathrm{bridge}}$}
+
+\begin{lstlisting}[language={},basicstyle=\ttfamily\scriptsize]
+[SEG:BRIDGE | scope:meta | temporal:LIVE]
+You are continuing an ongoing conversation.
+A detailed summary of the earlier discussion
+is being prepared and will be available
+shortly. For now, focus on the most recent
+exchanges provided below. If the user
+references something from earlier that is
+not visible in the current context,
+acknowledge it naturally and proceed based
+on available information. Do not mention any
+internal memory or context limitations.
+\end{lstlisting}
+
+\subsection{Stitch Bridge Prompt $\Omega_{s}$}
+
+\begin{lstlisting}[language={},basicstyle=\ttfamily\scriptsize]
+[SEG:BRIDGE | scope:meta | temporal:LIVE]
+The above summary covers the earlier portion
+of this conversation. The dialogue below
+continues from where the summary ends.
+Treat the summary as reliable context and
+the subsequent dialogue as the most recent
+and authoritative record. If any detail
+appears to conflict, prefer the information
+in the more recent dialogue turns.
+\end{lstlisting}
+
+
+\section{Extended Implementation: Python Reference}\label{app:code}
+
+The following listing is a historical, non-production sketch retained to document the manuscript's earlier design narrative. It is not the evaluated artifact; the reproducible Python package and validated experiment pipeline must be treated as the implementation authority.
+
+\begin{lstlisting}[style=python, caption={Core \sys{} orchestrator implementation.}, label={lst:impl}]
+import asyncio
+import time
+from enum import Enum, auto
+from dataclasses import dataclass, field
+from typing import Callable, List, Protocol, Sequence
+
+class State(Enum):
+    GLOBAL = auto()
+    TRANSITION = auto()
+    STITCHING = auto()
+
+@dataclass
+class Turn:
+    user: str
+    assistant: str
+    token_count: int
+
+@dataclass
+class Config:
+    system_prompt: str
+    trigger_tokens: int
+    max_tokens: int
+    window_size: int = 5
+    alpha: float = 0.7
+    timeout_s: float = 60.0
+
+class LLMClient(Protocol):
+    async def generate(self, prompt: str) -> str: ...
+    async def summarize(self, turns: Sequence[Turn]) -> str: ...
+
+TokenCounter = Callable[[str], int]
+
+BRIDGE_PROMPT = (
+    "[SEG:BRIDGE | scope:meta | temporal:LIVE]\n"
+    "Continue from the recent conversation. "
+    "Use only visible details when exact history "
+    "is unavailable."
+)
+
+def render_turn(turn: Turn) -> str:
+    return f"User: {turn.user}\nAssistant: {turn.assistant}"
+
+class ContextBuffer:
+    def __init__(self, system_prompt: str,
+                 count_tokens: TokenCounter):
+        self.system_prompt = system_prompt
+        self.count_tokens = count_tokens
+        self.summary = ""
+        self.turns: List[Turn] = []
+
+    def assemble(self, user_msg: str = "",
+                 bridge: str = "") -> str:
+        parts = [self.system_prompt]
+        if self.summary:
+            parts.append("[SEG:SUMMARY]\n" + self.summary)
+        if bridge:
+            parts.append(bridge)
+        parts.extend(render_turn(t) for t in self.turns)
+        if user_msg:
+            parts.append("User: " + user_msg)
+        return "\n\n".join(parts)
+
+    @property
+    def token_count(self) -> int:
+        return self.count_tokens(self.assemble())
+
+    def append(self, turn: Turn) -> None:
+        self.turns.append(turn)
+
+    def recent(self, k: int) -> List[Turn]:
+        return list(self.turns[-k:])
+
+    def split_point(self, alpha: float) -> int:
+        total = sum(t.token_count for t in self.turns)
+        threshold = alpha * total
+        running = 0
+        for idx, turn in enumerate(self.turns, start=1):
+            running += turn.token_count
+            if running >= threshold:
+                return idx
+        return len(self.turns)
+
+    def freeze(self, split: int) -> List[Turn]:
+        return list(self.turns[:split])
+
+    def replace(self, summary: str,
+                retained: Sequence[Turn]) -> None:
+        self.summary = summary
+        self.turns = list(retained)
+
+class SlidingWindow(ContextBuffer):
+    def __init__(self, system_prompt: str,
+                 count_tokens: TokenCounter, k: int):
+        super().__init__(system_prompt, count_tokens)
+        self.k = k
+
+    def append(self, turn: Turn) -> None:
+        self.turns.append(turn)
+        self.turns = self.turns[-self.k:]
+
+    def init_from(self, turns: Sequence[Turn]) -> None:
+        self.turns = list(turns)[-self.k:]
+
+def stsp_protocol(summary: str, ledger: Sequence[Turn],
+                  system_prompt: str, max_tokens: int,
+                  count_tokens: TokenCounter):
+    buf = ContextBuffer(system_prompt, count_tokens)
+    retained = list(ledger)
+    buf.replace(summary, retained)
+    while buf.token_count > max_tokens and retained:
+        retained = retained[1:]
+        buf.replace(summary, retained)
+    if buf.token_count <= max_tokens:
+        return buf, "MERGED"
+
+    retained = list(ledger)[-2:]
+    while retained:
+        buf.replace("", retained)
+        if buf.token_count <= max_tokens:
+            return buf, "FALLBACK"
+        retained = retained[1:]
+    buf.replace("", [])
+    return buf, "FALLBACK"
+
+class SmoothContextOrchestrator:
+    def __init__(self, llm: LLMClient,
+                 config: Config,
+                 count_tokens: TokenCounter):
+        self.llm = llm
+        self.config = config
+        self.count_tokens = count_tokens
+        self.state = State.GLOBAL
+        self.buf_L = SlidingWindow(
+            config.system_prompt,
+            count_tokens,
+            k=config.window_size)
+        self.buf_G = ContextBuffer(
+            config.system_prompt,
+            count_tokens)
+        self.ledger: List[Turn] = []
+        self._compact_task: asyncio.Task | None = None
+        self._trigger_started_at: float | None = None
+
+    async def process_turn(self, user_msg):
+        if self.state == State.GLOBAL:
+            ctx = self.buf_G.assemble(user_msg)
+        else:
+            ctx = self.buf_L.assemble(
+                user_msg,
+                bridge=BRIDGE_PROMPT)
+
+        resp = await self.llm.generate(ctx)
+        turn = Turn(
+            user=user_msg,
+            assistant=resp,
+            token_count=self.count_tokens(
+                f"{user_msg}\n{resp}"))
+
+        if self.state == State.GLOBAL:
+            self.buf_G.append(turn)
+        else:
+            self.buf_L.append(turn)
+            self.ledger.append(turn)
+
+        await self._eval_transitions()
+        return resp
+
+    async def _eval_transitions(self):
+        if (self.state == State.GLOBAL and
+            self.buf_G.token_count
+            >= self.config.trigger_tokens):
+            await self._trigger()
+
+        elif self.state == State.TRANSITION:
+            if (self._compact_task is not None and
+                self._compact_task.done()):
+                await self._stitch(
+                    self._compact_task.result()
+                )
+            elif self._timed_out():
+                await self._fallback()
+
+    async def _trigger(self):
+        """GLOBAL -> TRANSITION"""
+        split = self.buf_G.split_point(
+            alpha=self.config.alpha)
+        snapshot = self.buf_G.freeze(split)
+        self._compact_task = (
+            asyncio.create_task(
+                self.llm.summarize(snapshot)
+            ))
+        self.buf_L.init_from(
+            self.buf_G.recent(
+                self.config.window_size))
+        self.ledger.clear()
+        self._trigger_started_at = time.monotonic()
+        self.state = State.TRANSITION
+
+    async def _stitch(self, summary):
+        """TRANSITION -> STITCHING -> GLOBAL"""
+        self.state = State.STITCHING
+        new_buf, _event = stsp_protocol(
+            summary, self.ledger,
+            self.buf_G.system_prompt,
+            self.config.max_tokens,
+            self.count_tokens)
+        self.buf_G = new_buf
+        self.ledger.clear()
+        self._trigger_started_at = None
+        self.state = State.GLOBAL
+
+    async def _fallback(self):
+        """TRANSITION -> GLOBAL (timeout)"""
+        if self._compact_task is not None:
+            self._compact_task.cancel()
+        self.buf_G, _event = stsp_protocol(
+            "Timeout before summary completed.",
+            self.ledger,
+            self.buf_G.system_prompt,
+            self.config.max_tokens,
+            self.count_tokens)
+        self.ledger.clear()
+        self._trigger_started_at = None
+        self.state = State.GLOBAL
+
+    def _timed_out(self) -> bool:
+        if self._trigger_started_at is None:
+            return False
+        return (time.monotonic()
+                - self._trigger_started_at
+                > self.config.timeout_s)
+\end{lstlisting}
+
+
+\end{document}

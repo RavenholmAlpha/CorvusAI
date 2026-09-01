@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Nebula — Premium Dashboard</title>
+  <meta name="description" content="Nebula — a premium dark mode analytics dashboard." />
+
+  <!-- Typography -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap"
+    rel="stylesheet"
+  />
+
+  <!-- Chart.js from CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- App styles & logic -->
+  <link rel="stylesheet" href="styles.css" />
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <!-- ===================== SIDEBAR ===================== -->
+    <aside class="sidebar glass" id="sidebar" aria-label="Primary navigation">
+      <div class="sidebar__brand">
+        <span class="sidebar__logo">◆</span>
+        <span class="sidebar__brand-name">Nebula</span>
+      </div>
+
+      <nav class="sidebar__nav">
+        <p class="sidebar__label">Menu</p>
+        <a class="nav-item active" href="#">
+          <span class="nav-item__icon">⌂</span><span class="nav-item__text">Overview</span>
+        </a>
+        <a class="nav-item" href="#">
+          <span class="nav-item__icon">◈</span><span class="nav-item__text">Analytics</span>
+        </a>
+        <a class="nav-item" href="#">
+          <span class="nav-item__icon">◉</span><span class="nav-item__text">Campaigns</span>
+        </a>
+        <a class="nav-item" href="#">
+          <span class="nav-item__icon">▤</span><span class="nav-item__text">Customers</span>
+        </a>
+
+        <p class="sidebar__label">General</p>
+        <a class="nav-item" href="#">
+          <span class="nav-item__icon">⚙</span><span class="nav-item__text">Settings</span>
+        </a>
+        <a class="nav-item" href="#">
+          <span class="nav-item__icon">✉</span><span class="nav-item__text">Messages</span>
+          <span class="nav-item__badge">4</span>
+        </a>
+      </nav>
+
+      <div class="sidebar__footer">
+        <div class="sidebar__progress">
+          <div class="sidebar__progress-bar"></div>
+        </div>
+        <p class="sidebar__progress-text">Storage: 7.2 GB / 10 GB</p>
+      </div>
+    </aside>
+
+    <!-- ===================== MAIN COLUMN ===================== -->
+    <div class="main">
+      <!-- ===================== TOP NAV BAR ===================== -->
+      <header class="topbar glass">
+        <button class="icon-btn" id="sidebarToggle" aria-label="Toggle sidebar">
+          <span class="icon-btn__bars"></span>
+        </button>
+
+        <div class="topbar__search">
+          <span class="topbar__search-icon">⌕</span>
+          <input type="search" placeholder="Search anything…" aria-label="Search" />
+          <kbd>⌘K</kbd>
+        </div>
+
+        <div class="topbar__actions">
+          <button class="icon-btn" aria-label="Notifications">🔔</button>
+          <div class="topbar__avatar">AK</div>
+        </div>
+      </header>
+
+      <!-- ===================== CONTENT ===================== -->
+      <main class="content">
+        <section class="hero">
+          <div>
+            <h1 class="hero__title">Good morning, Alex ✨</h1>
+            <p class="hero__subtitle">Here is what is happening with your business today.</p>
+          </div>
+          <button class="btn btn--gradient" id="refreshBtn">↻ Refresh data</button>
+        </section>
+
+        <section class="stats-row">
+          <div class="stat-card glass">
+            <p class="stat-card__label">Total Revenue</p>
+            <p class="stat-card__value">$84,204</p>
+            <p class="stat-card__delta positive">▲ +12.4% <span>vs last month</span></p>
+          </div>
+          <div class="stat-card glass">
+            <p class="stat-card__label">Active Users</p>
+            <p class="stat-card__value">12,930</p>
+            <p class="stat-card__delta positive">▲ +8.1% <span>vs last month</span></p>
+          </div>
+          <div class="stat-card glass">
+            <p class="stat-card__label">Conversion Rate</p>
+            <p class="stat-card__value">3.84%</p>
+            <p class="stat-card__delta negative">▼ -0.6% <span>vs last month</span></p>
+          </div>
+        </section>
+
+        <section class="widgets">
+          <!-- Widget 1: Chart.js line chart -->
+          <article class="widget glass widget--wide">
+            <header class="widget__header">
+              <div>
+                <h2 class="widget__title">Revenue Overview</h2>
+                <p class="widget__subtitle">Monthly performance across channels</p>
+              </div>
+              <div class="widget__legend">
+                <span class="legend-dot legend-dot--cyan"></span> Organic
+                <span class="legend-dot legend-dot--pink"></span> Paid
+              </div>
+            </header>
+            <div class="chart-wrap">
+              <canvas id="revenueChart" aria-label="Revenue chart"></canvas>
+            </div>
+          </article>
+
+          <!-- Widget 2: Goals -->
+          <article class="widget glass">
+            <header class="widget__header">
+              <div>
+                <h2 class="widget__title">Monthly Goals</h2>
+                <p class="widget__subtitle">Target completion status</p>
+              </div>
+            </header>
+            <div class="goals">
+              <div class="goal">
+                <div class="goal__top"><span>Signups</span><span class="goal__pct">78%</span></div>
+                <div class="progress"><div class="progress__fill progress__fill--cyan" style="width: 78%"></div></div>
+              </div>
+              <div class="goal">
+                <div class="goal__top"><span>Revenue</span><span class="goal__pct">64%</span></div>
+                <div class="progress"><div class="progress__fill progress__fill--violet" style="width: 64%"></div></div>
+              </div>
+              <div class="goal">
+                <div class="goal__top"><span>Retention</span><span class="goal__pct">91%</span></div>
+                <div class="progress"><div class="progress__fill progress__fill--pink" style="width: 91%"></div></div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Widget 3: Activity feed -->
+          <article class="widget glass">
+            <header class="widget__header">
+              <div>
+                <h2 class="widget__title">Live Activity</h2>
+                <p class="widget__subtitle">Latest events in your workspace</p>
+              </div>
+              <span class="live-badge"><span class="live-dot"></span> LIVE</span>
+            </header>
+            <ul class="feed">
+              <li class="feed__item">
+                <span class="feed__avatar feed__avatar--cyan">N</span>
+                <div class="feed__body">
+                  <p class="feed__text"><strong>Nadia R.</strong> published a new campaign</p>
+                  <p class="feed__time">2 minutes ago</p>
+                </div>
+              </li>
+              <li class="feed__item">
+                <span class="feed__avatar feed__avatar--violet">M</span>
+                <div class="feed__body">
+                  <p class="feed__text"><strong>Marcus L.</strong> upgraded to Pro plan</p>
+                  <p class="feed__time">18 minutes ago</p>
+                </div>
+              </li>
+              <li class="feed__item">
+                <span class="feed__avatar feed__avatar--pink">T</span>
+                <div class="feed__body">
+                  <p class="feed__text"><strong>Team</strong> hit 12,000 active users 🎉</p>
+                  <p class="feed__time">1 hour ago</p>
+                </div>
+              </li>
+            </ul>
+          </article>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
