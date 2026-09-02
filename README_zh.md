@@ -296,8 +296,8 @@ Bundle 只控制功能组件，不会静默放宽权限：
 | Bundle | 用途 |
 |---|---|
 | `minimal` | 小型本地核心 |
-| `default` | 推荐工程配置 |
-| `full` | 增加浏览器、调度器、Channels、Nodes 与 MCP Server |
+| `default` | 为兼容性保留的精简工程配置 |
+| `full` | **新安装的默认模式**；启用所有内置功能，包括浏览器、调度器、Channels、入站 Webhook、Nodes 与 MCP Server |
 | `custom` | 显式组件组合 |
 
 不要提交 `~/.corvus`、数据库或真实凭据。

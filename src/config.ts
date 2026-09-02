@@ -160,7 +160,7 @@ export function createDefaultConfig(): CorvusConfig {
     contextOverflowMode: "compact-with-previous-model",
     webLocale: "en",
     theme: "cassette",
-    installation: { bundle: "default", permissionPreset: "balanced", features: ["durable-harness", "filesystem", "shell", "git", "web", "memory", "skills", "delegation", "workspaces", "mcp-client", "mcp-importer", "webhook", "webui"] },
+    installation: { bundle: "full", permissionPreset: "balanced", features: ["durable-harness", "filesystem", "shell", "git", "web", "memory", "skills", "delegation", "workspaces", "mcp-client", "mcp-importer", "mcp-server", "scheduler", "browser", "channels", "webhook", "execution-nodes", "webui"] },
     plugins: { installed: {}, enabled: {}, grants: {}, configs: {} },
   };
 }

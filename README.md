@@ -296,8 +296,8 @@ Bundles enable components but do not silently widen permissions:
 | Bundle | Purpose |
 |---|---|
 | `minimal` | Small local core |
-| `default` | Recommended engineering setup |
-| `full` | Browser, scheduler, channels, nodes, and MCP server support |
+| `default` | Reduced engineering setup retained for compatibility |
+| `full` | **Default for new installs**; enables all bundled features, including browser, scheduler, channels, inbound webhooks, nodes, and MCP server |
 | `custom` | Explicit component selection |
 
 Do not commit `~/.corvus`, databases, or real credentials.

@@ -8,8 +8,9 @@ import { PluginManagementService } from "../src/plugin-management.js";
 import { readPluginManifest, resolvePluginEntry } from "../src/plugins.js";
 
 describe("plugin kernel and feature bundles", () => {
+  it("uses the full bundle with webhook support for fresh installs",()=>{const config=createDefaultConfig();expect(config.installation?.bundle).toBe("full");expect(config.installation?.features).toEqual(expect.arrayContaining(["mcp-server","scheduler","browser","channels","webhook","execution-nodes"]));expect(BUNDLES.full.features).toContain("webhook");});
   it("plans and applies feature bundles without widening permissions", () => {
-    const config=createDefaultConfig(); const before={...config.permissions.rules}; const plan=planBundle(config,"full");
+    const config=createDefaultConfig(); config.installation={...config.installation!,bundle:"minimal",features:[...BUNDLES.minimal.features]}; const before={...config.permissions.rules}; const plan=planBundle(config,"full");
     expect(plan.enableFeatures).toContain("browser"); expect(plan.requiredCapabilities).toContain("browser.control");
     applyBundle(config,"full"); expect(config.installation?.bundle).toBe("full"); expect(config.permissions.rules).toEqual(before);
     applyPermissionPreset(config,"safe"); expect(config.permissions.rules["capability:process"]).toBe("ask");

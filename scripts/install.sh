@@ -1,6 +1,6 @@
 #!/usr/bin/env sh
 set -eu
-PRESET="default"
+PRESET="full"
 NO_OPEN=0
 while [ "$#" -gt 0 ]; do case "$1" in --preset) PRESET="$2"; shift 2;; --no-open) NO_OPEN=1; shift;; *) echo "Unknown option: $1" >&2; exit 2;; esac; done
 case "$PRESET" in minimal|default|full) ;; *) echo "Invalid preset: $PRESET" >&2; exit 2;; esac

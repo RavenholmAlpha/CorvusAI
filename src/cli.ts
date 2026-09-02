@@ -175,7 +175,7 @@ Options:
   const config = await loadLayeredConfig(process.cwd());
   if (cliArgs.command === "bundle" || cliArgs.command === "setup") {
     const service = new BundleService(getConfigRoot(), config, () => saveConfig(config));
-    const requested = cliArgs.value ?? (cliArgs.command === "setup" ? cliArgs.action ?? "default" : cliArgs.action);
+    const requested = cliArgs.value ?? (cliArgs.command === "setup" ? cliArgs.action ?? "full" : cliArgs.action);
     const target = requested as BundleId | undefined;
     if (!target || !["minimal", "default", "full", "custom"].includes(target)) { process.stdout.write(JSON.stringify({ current: await service.current(), catalog: service.catalog() }, null, 2) + "\n"); return; }
     const plan = await service.plan(target);
