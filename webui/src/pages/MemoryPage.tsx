@@ -5,6 +5,15 @@ import type { PageProps } from "./shared";
 import { defineTranslations, useI18n } from "../i18n";
 
 defineTranslations({
+  "memory.allWorkspaces": { en: "ALL WORKSPACES ({count})", "zh-CN": "全部工作区（{count}）" },
+  "memory.workspace": { en: "Workspace:", "zh-CN": "工作区：" },
+  "memory.selectWorkspace": { en: "Select Workspace", "zh-CN": "选择工作区" },
+  "memory.searchPlaceholder": { en: "Search title, content, or project...", "zh-CN": "搜索记忆标题、内容或项目..." },
+  "memory.viewDetail": { en: "VIEW DETAILS ↗", "zh-CN": "查看详情 ↗" },
+  "memory.copyContent": { en: "📋 COPY CONTENT", "zh-CN": "📋 复制内容" },
+  "memory.copied": { en: "Memory content copied to clipboard.", "zh-CN": "记忆内容已复制到剪贴板。" },
+  "memory.relatedMemories": { en: "Linked Memories & Context ({count}):", "zh-CN": "关联记忆与上下文（{count}）：" },
+  "memory.noRelated": { en: "No linked memories yet.", "zh-CN": "暂无关联记忆。" },
   "memory.obsoleteSuccess": { en: "Marked memory entry as obsolete.", "zh-CN": "已将记忆条目标记为过时。" },
   "memory.statusError": { en: "Failed to update status: {error}", "zh-CN": "更新状态失败：{error}" },
   "memory.required": { en: "Title and content are required.", "zh-CN": "标题和内容为必填项。" },
@@ -14,7 +23,7 @@ defineTranslations({
   "memory.selfLink": { en: "Cannot link a memory to itself.", "zh-CN": "记忆不能链接到自身。" },
   "memory.linked": { en: "Memory relationship established.", "zh-CN": "记忆关系已建立。" },
   "memory.linkError": { en: "Failed to link memories: {error}", "zh-CN": "链接记忆失败：{error}" },
-  "memory.allCategories": { en: "ALL MEMORY CATEGORIES ({count})", "zh-CN": "所有记忆分类（{count}）" },
+  "memory.allCategories": { en: "ALL CATEGORIES ({count})", "zh-CN": "所有记忆分类（{count}）" },
   "memory.architecture": { en: "ARCHITECTURE", "zh-CN": "架构" },
   "memory.decisions": { en: "DECISIONS", "zh-CN": "决策" },
   "memory.decision": { en: "DECISION", "zh-CN": "决策" },
@@ -29,10 +38,10 @@ defineTranslations({
   "memory.addEntry": { en: "＋ ADD MEMORY ENTRY", "zh-CN": "＋ 添加记忆条目" },
   "memory.confidenceShort": { en: "{value}% CONF", "zh-CN": "置信度 {value}%" },
   "memory.linkedTo": { en: "Linked to: {target}", "zh-CN": "链接到：{target}" },
-  "memory.link": { en: "🔗 LINK", "zh-CN": "🔗 链接" },
+  "memory.link": { en: "🔗 LINK", "zh-CN": "🔗 关联" },
   "memory.linkTitle": { en: "Link this memory with another record", "zh-CN": "将此记忆与另一条记录链接" },
   "memory.obsolete": { en: "OBSOLETE", "zh-CN": "标记过时" },
-  "memory.empty": { en: "NO MEMORY RECORDS IN CURRENT WORKSPACE", "zh-CN": "当前工作区中没有记忆记录" },
+  "memory.empty": { en: "NO MEMORY RECORDS FOUND", "zh-CN": "没有找到匹配的记忆记录" },
   "memory.addTitle": { en: "Add Workspace Memory Record", "zh-CN": "添加工作区记忆记录" },
   "memory.category": { en: "Category:", "zh-CN": "分类：" },
   "memory.confidence": { en: "Confidence (0.0–1.0):", "zh-CN": "置信度（0.0–1.0）：" },
@@ -56,17 +65,24 @@ defineTranslations({
 export function MemoryPage({ state, reload }: PageProps) {
   const { t } = useI18n();
   const [kind, setKind] = useState("all");
+  const [selectedProjectId, setSelectedProjectId] = useState<string>("all");
+  const [searchQuery, setSearchQuery] = useState("");
   const [open, setOpen] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
+  const [detailMemory, setDetailMemory] = useState<any | null>(null);
   const [primaryMemoryId, setPrimaryMemoryId] = useState("");
   const [targetMemoryId, setTargetMemoryId] = useState("");
   const [relationType, setRelationType] = useState("relates_to");
 
   // New Memory state
+  const [newProjectId, setNewProjectId] = useState(
+    state.activeProjectId || state.projects[0]?.id || ""
+  );
   const [newTitle, setNewTitle] = useState("");
   const [newKind, setNewKind] = useState("decision");
   const [newContent, setNewContent] = useState("");
   const [newConfidence, setNewConfidence] = useState("0.9");
+
   const kindLabel = (value: string) => {
     const keys: Record<string, string> = {
       architecture: "memory.architecture",
@@ -77,6 +93,7 @@ export function MemoryPage({ state, reload }: PageProps) {
     };
     return keys[value] ? t(keys[value]) : value;
   };
+
   const relationLabel = (value: string) => {
     const keys: Record<string, string> = {
       relates_to: "memory.relatesTo",
@@ -88,14 +105,52 @@ export function MemoryPage({ state, reload }: PageProps) {
     return keys[value] ? t(keys[value]) : value;
   };
 
-  const memories = useMemo(
-    () => (kind === "all" ? state.memories : state.memories.filter((memory) => memory.kind === kind)),
-    [state.memories, kind]
-  );
+  const memories = useMemo(() => {
+    return state.memories.filter((memory) => {
+      if (selectedProjectId !== "all" && memory.projectId !== selectedProjectId) {
+        return false;
+      }
+      if (kind !== "all" && memory.kind !== kind) {
+        return false;
+      }
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTitle = (memory.title || "").toLowerCase().includes(q);
+        const matchContent = (memory.content || "").toLowerCase().includes(q);
+        const project = state.projects.find((p) => p.id === memory.projectId);
+        const matchProject = (project?.name || "").toLowerCase().includes(q);
+        if (!matchTitle && !matchContent && !matchProject) {
+          return false;
+        }
+      }
+      return true;
+    });
+  }, [state.memories, state.projects, selectedProjectId, kind, searchQuery]);
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      toast.success(t("memory.copied"));
+    } catch {
+      toast.error("Failed to copy content to clipboard");
+    }
+  };
 
   const obsolete = async (id: string) => {
     try {
       await postJson("/api/memories/" + id + "/obsolete");
+      if (detailMemory && detailMemory.id === id) {
+        setDetailMemory((prev: any) => (prev ? { ...prev, status: "obsolete" } : null));
+      }
       await reload();
       toast.info(t("memory.obsoleteSuccess"));
     } catch (e) {
@@ -109,9 +164,14 @@ export function MemoryPage({ state, reload }: PageProps) {
       toast.error(t("memory.required"));
       return;
     }
+    const targetProject = newProjectId || state.activeProjectId || state.projects[0]?.id;
+    if (!targetProject) {
+      toast.error("Please select a workspace for this memory record.");
+      return;
+    }
     try {
       await postJson("/api/memories", {
-        projectId: state.activeProjectId,
+        projectId: targetProject,
         kind: newKind,
         title: newTitle.trim(),
         content: newContent.trim(),
@@ -154,64 +214,194 @@ export function MemoryPage({ state, reload }: PageProps) {
   return (
     <>
       <div className="memory-toolbar">
-        <select value={kind} onChange={(e) => setKind(e.target.value)}>
-          <option value="all">{t("memory.allCategories", { count: state.memories.length })}</option>
-          <option value="architecture">{t("memory.architecture")}</option>
-          <option value="decision">{t("memory.decisions")}</option>
-          <option value="pitfall">{t("memory.pitfalls")}</option>
-          <option value="open_issue">{t("memory.openIssues")}</option>
-          <option value="handoff">{t("memory.handoffs")}</option>
-        </select>
-        <button
-          onClick={() => {
-            if (state.memories.length < 2) {
-              toast.error(t("memory.needTwo"));
-              return;
-            }
-            setPrimaryMemoryId(state.memories[0]?.id || "");
-            setTargetMemoryId(state.memories[1]?.id || "");
-            setLinkOpen(true);
-          }}
-        >
-          {t("memory.linkMemories")}
-        </button>
-        <button className="primary" onClick={() => setOpen(true)}>
-          {t("memory.addEntry")}
-        </button>
+        <div className="memory-toolbar-group">
+          {/* Workspace Filter Dropdown */}
+          <select
+            className="memory-select workspace-select"
+            value={selectedProjectId}
+            onChange={(e) => setSelectedProjectId(e.target.value)}
+            title={t("memory.selectWorkspace")}
+          >
+            <option value="all">
+              {t("memory.allWorkspaces", { count: state.memories.length })}
+            </option>
+            {state.projects.map((p) => {
+              const count = state.memories.filter((m) => m.projectId === p.id).length;
+              return (
+                <option key={p.id} value={p.id}>
+                  📂 {p.name} ({count})
+                </option>
+              );
+            })}
+          </select>
+
+          {/* Category Filter Dropdown */}
+          <select
+            className="memory-select category-select"
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+          >
+            <option value="all">
+              {t("memory.allCategories", {
+                count:
+                  selectedProjectId === "all"
+                    ? state.memories.length
+                    : state.memories.filter((m) => m.projectId === selectedProjectId).length,
+              })}
+            </option>
+            <option value="architecture">{t("memory.architecture")}</option>
+            <option value="decision">{t("memory.decisions")}</option>
+            <option value="pitfall">{t("memory.pitfalls")}</option>
+            <option value="open_issue">{t("memory.openIssues")}</option>
+            <option value="handoff">{t("memory.handoffs")}</option>
+          </select>
+
+          {/* Search Filter */}
+          <div className="memory-search-wrapper">
+            <input
+              type="text"
+              className="memory-search-input"
+              placeholder={t("memory.searchPlaceholder")}
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className="search-clear-btn"
+                onClick={() => setSearchQuery("")}
+                title="Clear search"
+              >
+                ×
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="memory-toolbar-actions">
+          <button
+            onClick={() => {
+              if (state.memories.length < 2) {
+                toast.error(t("memory.needTwo"));
+                return;
+              }
+              setPrimaryMemoryId(state.memories[0]?.id || "");
+              setTargetMemoryId(state.memories[1]?.id || "");
+              setLinkOpen(true);
+            }}
+          >
+            {t("memory.linkMemories")}
+          </button>
+          <button
+            className="primary"
+            onClick={() => {
+              setNewProjectId(
+                selectedProjectId !== "all"
+                  ? selectedProjectId
+                  : state.activeProjectId || state.projects[0]?.id || ""
+              );
+              setOpen(true);
+            }}
+          >
+            {t("memory.addEntry")}
+          </button>
+        </div>
       </div>
 
       <div className="memory-graph">
         {memories.length ? (
           memories.map((memory) => {
+            const project = state.projects.find((p) => p.id === memory.projectId);
             const links = state.memoryLinks.filter(
               (item) => item.memoryId === memory.id || item.relatedMemoryId === memory.id
             );
             return (
               <article className={"memory-node " + memory.kind} key={memory.id}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "6px" }}>
-                  <b style={{ color: "var(--amber)", fontFamily: "var(--font-mono)", fontSize: "13px" }}>
-                    [{kindLabel(memory.kind)}] {memory.title}
-                  </b>
-                  <span style={{ fontSize: "10px", color: "var(--text-dim)", fontFamily: "var(--font-mono)" }}>
-                    {t("memory.confidenceShort", { value: Math.round(memory.confidence * 100) })}
-                  </span>
+                <div>
+                  <div
+                    style={{
+                      display: "flex",
+                      justifyContent: "space-between",
+                      alignItems: "flex-start",
+                      marginBottom: "8px",
+                      gap: "8px",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+                      <b
+                        style={{
+                          color: "var(--amber)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "13px",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => setDetailMemory(memory)}
+                      >
+                        [{kindLabel(memory.kind)}] {memory.title}
+                      </b>
+                      {project && (
+                        <span
+                          className="memory-project-pill"
+                          title={`Workspace: ${project.name} (${project.path})`}
+                        >
+                          📂 {project.name}
+                        </span>
+                      )}
+                    </div>
+                    <span
+                      style={{
+                        fontSize: "10px",
+                        color: "var(--text-dim)",
+                        fontFamily: "var(--font-mono)",
+                        flexShrink: 0,
+                      }}
+                    >
+                      {t("memory.confidenceShort", { value: Math.round(memory.confidence * 100) })}
+                    </span>
+                  </div>
+
+                  {/* Snippet Preview (Clamped to 4 lines) */}
+                  <p
+                    className="memory-node-content-preview"
+                    onClick={() => setDetailMemory(memory)}
+                    title="点击查看完整记忆详情"
+                  >
+                    {memory.content}
+                  </p>
                 </div>
-                <p style={{ fontSize: "13px", lineHeight: "1.5", margin: "6px 0 10px", color: "var(--text-main)" }}>{memory.content}</p>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderTop: "1px dashed var(--border-dark)", paddingTop: "8px", marginTop: "6px" }}>
+
+                <div className="memory-node-footer">
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "4px" }}>
                     {links.map((item, index) => {
                       const otherId = item.memoryId === memory.id ? item.relatedMemoryId : item.memoryId;
                       const otherMem = state.memories.find((m) => m.id === otherId);
                       return (
-                        <span className="relation" key={index} title={t("memory.linkedTo", { target: otherMem?.title || otherId })}>
-                          🔗 {relationLabel(item.relation)} {otherMem ? `(${otherMem.title.slice(0, 15)})` : ""}
+                        <span
+                          className="relation"
+                          key={index}
+                          title={t("memory.linkedTo", { target: otherMem?.title || otherId })}
+                        >
+                          🔗 {relationLabel(item.relation)} {otherMem ? `(${otherMem.title.slice(0, 10)})` : ""}
                         </span>
                       );
                     })}
                   </div>
+
                   <div style={{ display: "flex", gap: "6px", alignItems: "center" }}>
                     <button
-                      style={{ fontSize: "10px", padding: "2px 6px", background: "#181d28", borderColor: "var(--border-mid)" }}
+                      className="view-detail-btn"
+                      onClick={() => setDetailMemory(memory)}
+                      title="查看完整记忆与关联"
+                    >
+                      {t("memory.viewDetail")}
+                    </button>
+                    <button
+                      style={{
+                        fontSize: "10px",
+                        padding: "2px 6px",
+                        background: "#181d28",
+                        borderColor: "var(--border-mid)",
+                      }}
                       onClick={() => {
                         setPrimaryMemoryId(memory.id);
                         const other = state.memories.find((m) => m.id !== memory.id);
@@ -223,7 +413,10 @@ export function MemoryPage({ state, reload }: PageProps) {
                       {t("memory.link")}
                     </button>
                     {memory.status !== "obsolete" && (
-                      <button style={{ fontSize: "10px", padding: "2px 6px" }} onClick={() => void obsolete(memory.id)}>
+                      <button
+                        style={{ fontSize: "10px", padding: "2px 6px" }}
+                        onClick={() => void obsolete(memory.id)}
+                      >
                         {t("memory.obsolete")}
                       </button>
                     )}
@@ -233,16 +426,171 @@ export function MemoryPage({ state, reload }: PageProps) {
             );
           })
         ) : (
-          <div style={{ gridColumn: "1 / -1", textAlign: "center", padding: "48px", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+          <div
+            style={{
+              gridColumn: "1 / -1",
+              textAlign: "center",
+              padding: "48px",
+              color: "var(--text-muted)",
+              fontFamily: "var(--font-mono)",
+            }}
+          >
             {t("memory.empty")}
           </div>
         )}
       </div>
 
+      {/* Memory Detail Modal */}
+      {detailMemory && (
+        <Modal
+          title={`[${kindLabel(detailMemory.kind)}] ${detailMemory.title}`}
+          onClose={() => setDetailMemory(null)}
+        >
+          {(() => {
+            const project = state.projects.find((p) => p.id === detailMemory.projectId);
+            const detailLinks = state.memoryLinks.filter(
+              (item) => item.memoryId === detailMemory.id || item.relatedMemoryId === detailMemory.id
+            );
+            return (
+              <div className="memory-detail-box">
+                <div className="memory-detail-meta">
+                  {project && (
+                    <span className="memory-project-pill" style={{ fontSize: "11px", padding: "3px 8px" }}>
+                      📂 {project.name} ({project.path})
+                    </span>
+                  )}
+                  <span
+                    style={{
+                      font: "11px var(--font-mono)",
+                      color: "var(--amber-bright)",
+                      background: "rgba(255, 122, 0, 0.12)",
+                      border: "1px solid var(--amber)",
+                      padding: "2px 6px",
+                      borderRadius: "3px",
+                    }}
+                  >
+                    {t("memory.confidenceShort", {
+                      value: Math.round((detailMemory.confidence ?? 0.8) * 100),
+                    })}
+                  </span>
+                  <span
+                    style={{
+                      font: "11px var(--font-mono)",
+                      color: detailMemory.status === "obsolete" ? "var(--led-red)" : "var(--led-green)",
+                      background: "#12141a",
+                      border: "1px solid var(--border-dark)",
+                      padding: "2px 6px",
+                      borderRadius: "3px",
+                    }}
+                  >
+                    STATUS: {detailMemory.status?.toUpperCase() || "ACTIVE"}
+                  </span>
+                </div>
+
+                <div className="memory-detail-body">{detailMemory.content}</div>
+
+                {detailLinks.length > 0 && (
+                  <div className="memory-detail-links">
+                    <b style={{ font: "12px var(--font-mono)", color: "var(--amber)" }}>
+                      {t("memory.relatedMemories", { count: detailLinks.length })}
+                    </b>
+                    {detailLinks.map((item, index) => {
+                      const otherId =
+                        item.memoryId === detailMemory.id ? item.relatedMemoryId : item.memoryId;
+                      const otherMem = state.memories.find((m) => m.id === otherId);
+                      return (
+                        <div
+                          key={index}
+                          className="memory-detail-link-item"
+                          onClick={() => {
+                            if (otherMem) setDetailMemory(otherMem);
+                          }}
+                          title="点击跳转查看该关联记忆"
+                        >
+                          <span>
+                            🔗 <b>{relationLabel(item.relation)}</b>: {otherMem ? otherMem.title : otherId}
+                          </span>
+                          <span style={{ color: "var(--vfd-cyan)", fontSize: "11px" }}>查看 ↗</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "8px",
+                    marginTop: "8px",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    <button
+                      type="button"
+                      onClick={() => void copyToClipboard(detailMemory.content)}
+                    >
+                      {t("memory.copyContent")}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPrimaryMemoryId(detailMemory.id);
+                        const other = state.memories.find((m) => m.id !== detailMemory.id);
+                        setTargetMemoryId(other?.id || "");
+                        setLinkOpen(true);
+                      }}
+                    >
+                      {t("memory.linkTitle")}
+                    </button>
+                  </div>
+
+                  <div style={{ display: "flex", gap: "8px" }}>
+                    {detailMemory.status !== "obsolete" && (
+                      <button
+                        type="button"
+                        className="danger"
+                        onClick={() => void obsolete(detailMemory.id)}
+                      >
+                        {t("memory.obsolete")}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="primary"
+                      onClick={() => setDetailMemory(null)}
+                    >
+                      {t("common.close") || "关闭"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </Modal>
+      )}
+
+      {/* Create Memory Modal */}
       {open && (
         <Modal title={t("memory.addTitle")} onClose={() => setOpen(false)}>
           <form onSubmit={handleCreateMemory} className="simple-form">
             <div className="form-grid-2col">
+              <label>
+                {t("memory.workspace")}
+                <select
+                  value={newProjectId}
+                  onChange={(e) => setNewProjectId(e.target.value)}
+                  required
+                >
+                  {state.projects.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      📂 {p.name} ({p.path})
+                    </option>
+                  ))}
+                </select>
+              </label>
               <label>
                 {t("memory.category")}
                 <select value={newKind} onChange={(e) => setNewKind(e.target.value)}>
@@ -253,6 +601,8 @@ export function MemoryPage({ state, reload }: PageProps) {
                   <option value="handoff">{t("memory.handoff")}</option>
                 </select>
               </label>
+            </div>
+            <div className="form-grid-2col" style={{ marginTop: "10px" }}>
               <label>
                 {t("memory.confidence")}
                 <input
@@ -264,17 +614,17 @@ export function MemoryPage({ state, reload }: PageProps) {
                   onChange={(e) => setNewConfidence(e.target.value)}
                 />
               </label>
+              <label>
+                {t("memory.title")}
+                <input
+                  type="text"
+                  placeholder={t("memory.titlePlaceholder")}
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  autoFocus
+                />
+              </label>
             </div>
-            <label style={{ marginTop: "10px" }}>
-              {t("memory.title")}
-              <input
-                type="text"
-                placeholder={t("memory.titlePlaceholder")}
-                value={newTitle}
-                onChange={(e) => setNewTitle(e.target.value)}
-                autoFocus
-              />
-            </label>
             <label style={{ marginTop: "10px" }}>
               {t("memory.content")}
               <textarea
@@ -296,17 +646,21 @@ export function MemoryPage({ state, reload }: PageProps) {
         </Modal>
       )}
 
+      {/* Link Memories Modal */}
       {linkOpen && (
         <Modal title={t("memory.relationshipTitle")} onClose={() => setLinkOpen(false)}>
           <form onSubmit={handleLinkMemories} className="simple-form">
             <label>
               {t("memory.source")}
               <select value={primaryMemoryId} onChange={(e) => setPrimaryMemoryId(e.target.value)}>
-                {state.memories.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    [{kindLabel(m.kind)}] {m.title}
-                  </option>
-                ))}
+                {state.memories.map((m) => {
+                  const proj = state.projects.find((p) => p.id === m.projectId);
+                  return (
+                    <option key={m.id} value={m.id}>
+                      [{kindLabel(m.kind)}] {m.title} {proj ? `(📂 ${proj.name})` : ""}
+                    </option>
+                  );
+                })}
               </select>
             </label>
             <div className="form-grid-2col" style={{ marginTop: "10px" }}>
@@ -325,11 +679,14 @@ export function MemoryPage({ state, reload }: PageProps) {
                 <select value={targetMemoryId} onChange={(e) => setTargetMemoryId(e.target.value)}>
                   {state.memories
                     .filter((m) => m.id !== primaryMemoryId)
-                    .map((m) => (
-                      <option key={m.id} value={m.id}>
-                        [{kindLabel(m.kind)}] {m.title}
-                      </option>
-                    ))}
+                    .map((m) => {
+                      const proj = state.projects.find((p) => p.id === m.projectId);
+                      return (
+                        <option key={m.id} value={m.id}>
+                          [{kindLabel(m.kind)}] {m.title} {proj ? `(📂 ${proj.name})` : ""}
+                        </option>
+                      );
+                    })}
                 </select>
               </label>
             </div>
@@ -347,3 +704,5 @@ export function MemoryPage({ state, reload }: PageProps) {
     </>
   );
 }
+
+

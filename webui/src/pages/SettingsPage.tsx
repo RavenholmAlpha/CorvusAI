@@ -827,9 +827,101 @@ export function SettingsPage({ state, reload }: PageProps) {
     }
   };
 
+  const [currentZoom, setCurrentZoom] = useState<number>(() => {
+    const saved = localStorage.getItem("corvus_ui_zoom");
+    return saved ? Number(saved) : 100;
+  });
+
+  const updateZoom = (nextZoom: number) => {
+    setCurrentZoom(nextZoom);
+    const scale = nextZoom / 100;
+    (document.documentElement.style as any).zoom = String(scale);
+    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    localStorage.setItem("corvus_ui_zoom", String(nextZoom));
+    window.dispatchEvent(new Event("storage"));
+  };
+
   return (
     <>
       <div className="grid">
+        <Card title={t("settings.appearance.title") || "界面缩放与排版"}>
+          <p style={{ color: "var(--text-muted)", marginTop: 0 }}>
+            {t("settings.appearance.help") || "调整工作台显示缩放比例及侧边栏默认宽度（也可在顶部栏或直接拖拽侧边栏边缘实时调整）。"}
+          </p>
+
+          <div style={{ display: "grid", gap: "14px" }}>
+            <div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                <span style={{ font: "12px var(--font-mono)", color: "var(--amber-bright)" }}>
+                  {t("settings.appearance.zoom") || "界面缩放比例"}: <b>{currentZoom}%</b>
+                </span>
+                <button
+                  style={{ fontSize: "10px", padding: "2px 6px" }}
+                  onClick={() => updateZoom(100)}
+                >
+                  {t("settings.appearance.resetZoom") || "恢复 100%"}
+                </button>
+              </div>
+              <input
+                type="range"
+                min="60"
+                max="160"
+                step="5"
+                value={currentZoom}
+                onChange={(e) => updateZoom(Number(e.target.value))}
+                style={{ width: "100%", accentColor: "var(--amber)" }}
+              />
+              <div style={{ display: "flex", gap: "6px", flexWrap: "wrap", marginTop: "8px" }}>
+                {[75, 85, 90, 100, 110, 125, 150].map((val) => (
+                  <button
+                    key={val}
+                    className={currentZoom === val ? "primary" : ""}
+                    style={{ fontSize: "10px", padding: "3px 8px" }}
+                    onClick={() => updateZoom(val)}
+                  >
+                    {val}%
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ borderTop: "1px dashed var(--border-dark)", paddingTop: "10px", display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+              <div>
+                <label style={{ font: "11px var(--font-mono)", color: "var(--text-dim)", display: "block", marginBottom: "4px" }}>
+                  {t("settings.appearance.mainSidebar") || "主导航栏宽度"}:
+                </label>
+                <button
+                  style={{ fontSize: "10px", padding: "3px 6px" }}
+                  onClick={() => {
+                    localStorage.setItem("corvus_sidebar_width", "240");
+                    document.documentElement.style.setProperty("--sidebar-width", "240px");
+                    window.dispatchEvent(new Event("storage"));
+                    toast.success("主侧边栏宽度已重置为 240px");
+                  }}
+                >
+                  重置主侧边栏 (240px)
+                </button>
+              </div>
+              <div>
+                <label style={{ font: "11px var(--font-mono)", color: "var(--text-dim)", display: "block", marginBottom: "4px" }}>
+                  {t("settings.appearance.chatSidebar") || "对话会话栏宽度"}:
+                </label>
+                <button
+                  style={{ fontSize: "10px", padding: "3px 6px" }}
+                  onClick={() => {
+                    localStorage.setItem("corvus_chat_sidebar_width", "290");
+                    document.documentElement.style.setProperty("--chat-sidebar-width", "290px");
+                    window.dispatchEvent(new Event("storage"));
+                    toast.success("对话会话栏宽度已重置为 290px");
+                  }}
+                >
+                  重置会话栏 (290px)
+                </button>
+              </div>
+            </div>
+          </div>
+        </Card>
+
         <Card title={t("settings.language.title")}>
           <p style={{ color: "var(--text-muted)", marginTop: 0 }}>{t("language.description")}</p>
           <label>

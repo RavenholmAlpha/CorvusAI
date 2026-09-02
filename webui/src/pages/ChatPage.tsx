@@ -4,7 +4,7 @@ import type { Project, Session, SessionContextInfo, Task } from "../types";
 import type { PageProps } from "./shared";
 import { defineTranslations, useI18n } from "../i18n";
 import { MessageContent } from "../MessageContent";
-import { Modal, SimpleForm, TapeDeckReels, toast } from "../components";
+import { Modal, SimpleForm, TapeDeckReels, ZoomControl, toast } from "../components";
 
 type Action = { type: "rename" | "archive" | "delete"; session: Session } | null;
 
@@ -25,7 +25,7 @@ function ToolCallItem({
   tasks?: Task[];
   currentSessionId?: string;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const name = call.function?.name || call.name || "tool";
   let formattedArgs = "";
   let parsedArgs: any = null;
@@ -91,7 +91,7 @@ function ToolResultItem({
   tasks?: Task[];
   currentSessionId?: string;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const toolName = message.metadata?.name || message.name || (message.toolCallId ? message.toolCallId.slice(0, 16) : "Tool Output");
   const rawContent = String(message.content ?? "");
   let formattedOutput = rawContent;
@@ -182,6 +182,70 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const [newProjectName, setNewProjectName] = useState("");
   const [newProjectPath, setNewProjectPath] = useState("");
 
+  // Chat Sidebar Resizing State
+  const [chatSidebarWidth, setChatSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("corvus_chat_sidebar_width");
+    return saved ? Number(saved) : 290;
+  });
+  const [isResizingChat, setIsResizingChat] = useState(false);
+
+  // Zoom / UI Scale State
+  const [zoom, setZoom] = useState<number>(() => {
+    const saved = localStorage.getItem("corvus_ui_zoom");
+    return saved ? Number(saved) : 100;
+  });
+
+  useEffect(() => {
+    const onStorage = () => {
+      const z = localStorage.getItem("corvus_ui_zoom");
+      if (z) setZoom(Number(z));
+      const w = localStorage.getItem("corvus_chat_sidebar_width");
+      if (w) setChatSidebarWidth(Number(w));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
+
+  const handleZoomChange = (nextZoom: number) => {
+    setZoom(nextZoom);
+    const scale = nextZoom / 100;
+    (document.documentElement.style as any).zoom = String(scale);
+    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    localStorage.setItem("corvus_ui_zoom", String(nextZoom));
+  };
+
+  const startChatResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingChat(true);
+    const startX = e.clientX;
+    const startW = chatSidebarWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = Math.max(200, Math.min(520, startW + (moveEvent.clientX - startX)));
+      setChatSidebarWidth(newWidth);
+      document.documentElement.style.setProperty("--chat-sidebar-width", `${newWidth}px`);
+    };
+
+    const onMouseUp = () => {
+      setIsResizingChat(false);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      setChatSidebarWidth((latest) => {
+        localStorage.setItem("corvus_chat_sidebar_width", String(latest));
+        return latest;
+      });
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const resetChatResize = () => {
+    setChatSidebarWidth(290);
+    localStorage.setItem("corvus_chat_sidebar_width", "290");
+    document.documentElement.style.setProperty("--chat-sidebar-width", "290px");
+  };
+
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const activeEventSourceRef = useRef<EventSource | null>(null);
@@ -236,7 +300,9 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     });
   };
 
-  const loadSessions = async () => {
+  const activeSessionRef = useRef(selected);
+
+  const loadSessions = async (preferredSelected?: string) => {
     try {
       const masters = await getJson<Session[]>("/api/master/sessions").catch(() => []);
       setMasterSessions(masters);
@@ -249,20 +315,30 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
         setProjectSessions([]);
       }
 
+      const current = preferredSelected || activeSessionRef.current || selected;
       const all = [...masters, ...projs];
-      if (!selected && all.length > 0) {
-        setSelected(masters[0]?.id || projs[0]?.id);
+      if (!current && all.length > 0) {
+        const defaultId = masters[0]?.id || projs[0]?.id;
+        activeSessionRef.current = defaultId;
+        setSelected(defaultId);
       }
     } catch (e) {
       toast.error("Failed to load conversations: " + String(e));
     }
   };
 
-  const loadMessages = async () => {
-    if (selected) {
+  const loadMessages = async (targetId?: string) => {
+    const sId = targetId || selected;
+    if (sId) {
       try {
-        const list = await getJson<any[]>("/api/sessions/" + selected + "/messages");
-        setMessages(list);
+        const list = await getJson<any[]>("/api/sessions/" + sId + "/messages");
+        setMessages((prev) => {
+          // Preserve any in-flight temporary optimistic user messages that aren't yet recorded by backend
+          const temps = prev.filter(
+            (m) => m.id && String(m.id).startsWith("temp-") && !list.some((saved) => saved.role === "user" && saved.content === m.content)
+          );
+          return [...list, ...temps];
+        });
       } catch (e) {
         toast.error("Failed to load conversation: " + String(e));
       }
@@ -271,13 +347,14 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     }
   };
 
-  const loadSessionContext = async () => {
-    if (!selected) {
+  const loadSessionContext = async (targetId?: string) => {
+    const sId = targetId || selected;
+    if (!sId) {
       setSessionContext(null);
       return;
     }
     try {
-      const info = await getJson<SessionContextInfo>(`/api/sessions/${selected}/context`);
+      const info = await getJson<SessionContextInfo>(`/api/sessions/${sId}/context`);
       setSessionContext(info);
     } catch {
       setSessionContext(null);
@@ -308,11 +385,18 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   }, [state.activeProjectId]);
 
   useEffect(() => {
-    loadMessages();
-    loadSessionContext();
-    setStatus("idle");
-    setStream("");
-    setRunId("");
+    if (activeSessionRef.current !== selected) {
+      activeSessionRef.current = selected;
+      if (activeEventSourceRef.current) {
+        activeEventSourceRef.current.close();
+        activeEventSourceRef.current = null;
+      }
+      setStatus("idle");
+      setStream("");
+      setRunId("");
+    }
+    loadMessages(selected);
+    loadSessionContext(selected);
   }, [selected]);
 
   useEffect(() => {
@@ -363,13 +447,14 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     e.preventDefault();
     if (!draft.trim() || status === "running" || status === "submitting") return;
 
-    let targetSessionId = selected;
+    let targetSessionId = selected || activeSessionRef.current;
     if (!targetSessionId) {
       try {
         const newSession = await postJson<Session>("/api/master/sessions", { name: "Master Conversation" });
         targetSessionId = newSession.id;
+        activeSessionRef.current = targetSessionId;
         setSelected(targetSessionId);
-        await loadSessions();
+        await loadSessions(targetSessionId);
       } catch (err) {
         toast.error("Could not initialize session: " + String(err));
         return;
@@ -411,6 +496,9 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
           const item = JSON.parse((event as MessageEvent).data);
           if (item.runId) setRunId(item.runId);
           setActivity((items) => [...items, { type: item.type, createdAt: item.createdAt, runId: item.runId }].slice(-20));
+          // Live reload of messages and approvals so tool executions and pending permissions appear immediately
+          void loadMessages(targetSessionId);
+          void reload();
         } catch {}
       });
 
@@ -421,14 +509,26 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
         } catch {}
       });
 
-      source.addEventListener("complete", async () => {
+      source.addEventListener("complete", async (event) => {
         source.close();
         activeEventSourceRef.current = null;
+        let routedSessionId: string | undefined;
+        try {
+          const parsed = JSON.parse((event as MessageEvent).data);
+          const rId: string = typeof parsed?.routedSessionId === "string" ? parsed.routedSessionId : "";
+          if (rId) {
+            routedSessionId = rId;
+            activeSessionRef.current = rId;
+            setSelected(rId);
+          }
+        } catch {}
         setStatus("idle");
         setOperationId("");
         setStream("");
-        await loadMessages();
-        await loadSessionContext();
+        const finalSessionId = routedSessionId || targetSessionId;
+        await loadMessages(finalSessionId);
+        await loadSessionContext(finalSessionId);
+        await loadSessions(finalSessionId);
         void reload();
       });
 
@@ -452,6 +552,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
         } catch {}
         setStream("Error: " + errorMsg);
         toast.error("Operation failed: " + errorMsg);
+        void loadMessages(targetSessionId);
       });
     } catch (err: any) {
       toast.error("Failed to send message: " + String(err.message || err));
@@ -509,16 +610,33 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     }
   };
 
-  // Context usage metrics computation
+  // Context usage metrics & detailed role breakdown computation
   const usage = sessionContext?.contextUsage;
-  const estimatedTokens = usage?.estimatedTokens ?? (messages.length * 120 + 500);
+  const breakdown = usage?.memoryBreakdown ?? {
+    system: 500,
+    user: Math.ceil(messages.filter((m) => m.role === "user").reduce((acc, m) => acc + (typeof m.content === "string" ? m.content.length : 0), 0) / 4),
+    assistant: Math.ceil(messages.filter((m) => m.role === "assistant").reduce((acc, m) => acc + (typeof m.content === "string" ? m.content.length : 0), 0) / 4),
+    tool: Math.ceil(messages.filter((m) => m.role === "tool").reduce((acc, m) => acc + (typeof m.content === "string" ? m.content.length : 0), 0) / 4),
+  };
+  const systemTokens = breakdown.system ?? 0;
+  const userTokens = breakdown.user ?? 0;
+  const assistantTokens = breakdown.assistant ?? 0;
+  const toolTokens = breakdown.tool ?? 0;
+  const estimatedTokens = usage?.estimatedTokens ?? (systemTokens + userTokens + assistantTokens + toolTokens);
   const contextWindow = usage?.contextWindow ?? 128000;
   const tokenRatio = Math.min(1, Math.max(0, estimatedTokens / contextWindow));
   const tokenPercent = Math.round(tokenRatio * 100);
+  const sysPct = Math.max(0.2, Number(((systemTokens / contextWindow) * 100).toFixed(1)));
+  const usrPct = Number(((userTokens / contextWindow) * 100).toFixed(1));
+  const asstPct = Number(((assistantTokens / contextWindow) * 100).toFixed(1));
+  const tlPct = Number(((toolTokens / contextWindow) * 100).toFixed(1));
   const runningDir = isMasterSession ? "Global Control Plane (Unrestricted)" : (project?.path || parentProject?.path || "Workspace Root");
 
   return (
-    <div className="chat">
+    <div
+      className="chat"
+      style={{ gridTemplateColumns: `${chatSidebarWidth}px 4px minmax(0, 1fr)` }}
+    >
       {/* 3-Level Hierarchical Project Tree Sidebar */}
       <div className={"session-list " + (mobileSessionOpen ? "mobile-open" : "")}>
         {/* TOP SEGMENTED SWITCH: MASTER HUB vs PROJECT WORKSPACES */}
@@ -662,12 +780,12 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                               await reload();
                               setSelected(newSession.id);
                               setMobileSessionOpen(false);
-                              toast.success(`Created session in ${proj.name}`);
+                              toast.success(`Created new session in ${proj.name}`);
                             } catch (e) {
                               toast.error(String(e));
                             }
                           }}
-                          title={`New session in ${proj.name}`}
+                          title={`New conversation in ${proj.name}`}
                         >
                           ＋ NEW
                         </button>
@@ -675,27 +793,26 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                     </div>
 
                     {!isCollapsed && (
-                      <div className="project-node-children">
+                      <div className="project-node-sessions">
                         {projSessions.length === 0 ? (
-                          <div className="empty-tree-hint">No conversations yet in this project.</div>
+                          <div className="empty-sessions-hint">No conversations yet. Click ＋ NEW to start.</div>
                         ) : (
                           projSessions.map((session) => {
                             const tasks = tasksByParent.get(session.id) || [];
+                            const isCurrentSelected = selected === session.id;
+
                             return (
-                              <div key={session.id}>
-                                <div className={"session-entry project-session " + (selected === session.id ? "active" : "")}>
+                              <div key={session.id} style={{ marginBottom: "4px" }}>
+                                <div className={"session-entry project-session " + (isCurrentSelected ? "active" : "")}>
                                   <div className="session-entry-title-row">
                                     <button
                                       onClick={() => {
                                         setSelected(session.id);
                                         setMobileSessionOpen(false);
-                                        if (proj.id !== state.activeProjectId) {
-                                          postJson("/api/projects/select", { projectId: proj.id }).catch(() => {});
-                                        }
                                       }}
-                                      title={session.name || session.preview || "Conversation"}
+                                      title={session.name || "Conversation"}
                                     >
-                                      💬 {session.name || session.preview || "Tape Session"}
+                                      💬 {session.name || "Conversation"}
                                     </button>
                                   </div>
                                   <div className="session-entry-actions">
@@ -742,6 +859,14 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
           </div>
         )}
       </div>
+
+      {/* Chat Session Resizer Handle */}
+      <div
+        className={"chat-sidebar-resizer " + (isResizingChat ? "resizing" : "")}
+        onMouseDown={startChatResize}
+        onDoubleClick={resetChatResize}
+        title="拖动调整会话栏宽度，双击恢复默认 (290px)"
+      />
 
       {/* Main Transcript Panel */}
       <div className="transcript">
@@ -821,6 +946,10 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                 </select>
               </label>
             )}
+
+            {/* UI Zoom Control */}
+            <ZoomControl zoom={zoom} onZoomChange={handleZoomChange} />
+
             {onToggleSidebar && (
               <button className="menu-toggle" onClick={onToggleSidebar} aria-label="Toggle Navigation Menu">
                 ☰
@@ -914,17 +1043,91 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
               </span>
             )}
           </div>
+        </div>
 
-          <div className="telemetry-hud-right">
-            <div className="context-meter-gauge" title={`Estimated Context Tokens: ${estimatedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${tokenPercent}%)\nLast request: ${usage?.lastRequestTokens ?? 0} tokens`}>
-              <span style={{ color: "var(--text-muted)", fontSize: "10px" }}>CONTEXT:</span>
-              <div className="context-bar-wrap">
-                <div className="context-bar-fill" style={{ width: `${tokenPercent}%` }} />
-              </div>
-              <span className="context-pct-label">{tokenPercent}%</span>
+        {/* Top Context Telemetry Breakdown Ribbon */}
+        <div className="context-top-hud" title={`Context Breakdown (上下文分布):\n• System & Skills (系统设定): ${systemTokens.toLocaleString()} tok (${sysPct}%)\n• User Prompts (用户输入): ${userTokens.toLocaleString()} tok (${usrPct}%)\n• Assistant Outputs (AI回复): ${assistantTokens.toLocaleString()} tok (${asstPct}%)\n• Tool Execution (工具调用): ${toolTokens.toLocaleString()} tok (${tlPct}%)\n• Total Used: ${estimatedTokens.toLocaleString()} / ${contextWindow.toLocaleString()} (${tokenPercent}%)\n• Compaction Threshold: ${usage?.threshold ? usage.threshold.toLocaleString() : "80,000"} tok`}>
+          <div className="context-top-hud-main">
+            <div className="context-breakdown-chips-row">
+              <span style={{ color: "var(--text-dim)", fontWeight: 700, fontSize: "10px", letterSpacing: "0.05em", marginRight: "2px" }}>
+                CONTEXT:
+              </span>
+              <span className="context-role-chip system" title="Tokens used by system prompt, agent identity, instructions, and active skills">
+                <span className="role-dot" />
+                <span>系统设定:</span>
+                <b>{systemTokens.toLocaleString()}</b>
+                <span style={{ fontSize: "9px", color: "var(--text-dim)" }}>({sysPct}%)</span>
+              </span>
+              <span className="context-role-chip user" title="Tokens used by user prompt messages">
+                <span className="role-dot" />
+                <span>用户输入:</span>
+                <b>{userTokens.toLocaleString()}</b>
+                <span style={{ fontSize: "9px", color: "var(--text-dim)" }}>({usrPct}%)</span>
+              </span>
+              <span className="context-role-chip assistant" title="Tokens generated by AI assistant messages">
+                <span className="role-dot" />
+                <span>AI回复:</span>
+                <b>{assistantTokens.toLocaleString()}</b>
+                <span style={{ fontSize: "9px", color: "var(--text-dim)" }}>({asstPct}%)</span>
+              </span>
+              <span className="context-role-chip tool" title="Tokens used by tool calls arguments and tool execution outputs">
+                <span className="role-dot" />
+                <span>工具调用:</span>
+                <b>{toolTokens.toLocaleString()}</b>
+                <span style={{ fontSize: "9px", color: "var(--text-dim)" }}>({tlPct}%)</span>
+              </span>
+              {usage?.lastRequestTokens ? (
+                <span className="context-role-chip" style={{ borderStyle: "dashed" }} title="Total tokens consumed in the most recent LLM turn">
+                  <span>⚡ 上轮请求:</span>
+                  <b style={{ color: "var(--amber-bright)" }}>{usage.lastRequestTokens.toLocaleString()}</b>
+                </span>
+              ) : null}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              <span style={{ font: "11px var(--font-mono)", color: "var(--text-muted)" }}>
+                总占用: <b style={{ color: tokenPercent > 80 ? "#ff4d4f" : tokenPercent > 50 ? "var(--amber-bright)" : "var(--vfd-cyan)" }}>{estimatedTokens.toLocaleString()}</b> / {contextWindow.toLocaleString()} (<b style={{ color: tokenPercent > 80 ? "#ff4d4f" : "var(--amber-bright)" }}>{tokenPercent}%</b>)
+              </span>
             </div>
           </div>
+
+          {/* Proportional Segmented Progress Bar */}
+          <div className="context-segment-bar-wrap">
+            {systemTokens > 0 && <div className="context-segment sys" style={{ width: `${sysPct}%` }} title={`System: ${systemTokens.toLocaleString()} (${sysPct}%)`} />}
+            {userTokens > 0 && <div className="context-segment usr" style={{ width: `${usrPct}%` }} title={`User: ${userTokens.toLocaleString()} (${usrPct}%)`} />}
+            {assistantTokens > 0 && <div className="context-segment asst" style={{ width: `${asstPct}%` }} title={`Assistant: ${assistantTokens.toLocaleString()} (${asstPct}%)`} />}
+            {toolTokens > 0 && <div className="context-segment tool" style={{ width: `${tlPct}%` }} title={`Tool: ${toolTokens.toLocaleString()} (${tlPct}%)`} />}
+          </div>
         </div>
+
+        {/* Collapsible Inspector HUD Drawer when inspectorOpen is toggled */}
+        {inspectorOpen && (
+          <div className="inspector-tray">
+            <div className="inspector-grid">
+              <div className="inspector-block">
+                <h4>📊 Context Window Allocation</h4>
+                <div>Window Capacity: <b>{contextWindow.toLocaleString()} tokens</b></div>
+                <div>Estimated Total: <b>{estimatedTokens.toLocaleString()} tokens ({tokenPercent}%)</b></div>
+                <div>Compaction Threshold: <b>{usage?.threshold ? usage.threshold.toLocaleString() : "80,000"} tokens</b></div>
+                <div>State: <b style={{ color: usage?.state === "compacting" ? "var(--amber)" : "var(--vfd-cyan)" }}>{(usage?.state || "normal").toUpperCase()}</b></div>
+              </div>
+              <div className="inspector-block">
+                <h4>🎯 Detailed Token Breakdown</h4>
+                <div>• System & Skills (系统/技能): <b style={{ color: "#fbbf24" }}>{systemTokens.toLocaleString()}</b> ({sysPct}%)</div>
+                <div>• User Prompts (用户指令): <b style={{ color: "#67e8f9" }}>{userTokens.toLocaleString()}</b> ({usrPct}%)</div>
+                <div>• Assistant Replies (助手回复): <b style={{ color: "#6ee7b7" }}>{assistantTokens.toLocaleString()}</b> ({asstPct}%)</div>
+                <div>• Tool Calls & Results (工具执行): <b style={{ color: "#d8b4fe" }}>{toolTokens.toLocaleString()}</b> ({tlPct}%)</div>
+              </div>
+              <div className="inspector-block">
+                <h4>⚡ Lifetime Session Telemetry</h4>
+                <div>Total Prompt Tokens: <b>{(usage?.totalPromptTokens ?? 0).toLocaleString()}</b></div>
+                <div>Total Completion Tokens: <b>{(usage?.totalCompletionTokens ?? 0).toLocaleString()}</b></div>
+                <div>Total LLM Requests: <b>{usage?.totalRequests ?? 0}</b></div>
+                <div>Total Session Messages: <b>{messages.length}</b></div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Modal: Register Workspace Project Manually */}
         {showAddProjectModal && (
@@ -1063,14 +1266,26 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
             );
           })}
 
-          {stream && (
+          {(stream || status === "running" || status === "submitting") && (
             <div className="message-bubble assistant streaming">
               <div className="message-header">
                 <span className="message-sender">
-                  {isMasterSession ? "👑 MASTER ORCHESTRATOR" : dispatchedTask ? "⚡ SUBAGENT" : "📂 PROJECT AGENT"} (STREAMING...)
+                  {isMasterSession ? "👑 MASTER ORCHESTRATOR" : dispatchedTask ? "⚡ SUBAGENT" : "📂 PROJECT AGENT"}{" "}
+                  {stream ? "(STREAMING...)" : "(THINKING / WORKING...)"}
                 </span>
+                {status === "running" && (
+                  <span className="tool-box-badge running" style={{ fontSize: "9px" }}>
+                    ● RUNNING
+                  </span>
+                )}
               </div>
-              <MessageContent text={stream} isStreaming={true} />
+              {stream ? (
+                <MessageContent text={stream} isStreaming={true} />
+              ) : (
+                <div style={{ color: "var(--amber-bright)", font: "12px var(--font-mono)", display: "flex", alignItems: "center", gap: "8px", padding: "4px 0" }}>
+                  <span className="streaming-caret">▌</span> 正在思考与执行中...
+                </div>
+              )}
             </div>
           )}
         </div>

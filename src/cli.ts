@@ -666,14 +666,6 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
             return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
           }
           if (target.projectId === null) {
-            const routed = resolveProjectRequest(prompt);
-            if (routed?.ambiguous) return { content: "Multiple registered projects match this request: " + routed.ambiguous.map((item) => item.name + " (" + item.id + ")").join(", ") + ". Please name one project explicitly.", pendingApprovals: 0 };
-            if (routed?.project) {
-              const runtime = getProjectAgent(routed.project.id);
-              runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(runtime.sessionId)), runtime.sessionId);
-              const result = await runtime.agent.send(prompt, { onChunk, signal });
-              return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0, routedProjectId: routed.project.id, routedSessionId: runtime.sessionId };
-            }
             masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
             const result = await masterAgent.send(prompt, { onChunk, signal });
             return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };

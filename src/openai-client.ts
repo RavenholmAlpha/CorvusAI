@@ -252,10 +252,21 @@ export class OpenAIChatClient {
                 }
                 if (delta.tool_calls) {
                   for (const tc of delta.tool_calls) {
-                    if (tc.id) {
-                      toolCalls[tc.index] = { id: tc.id, type: tc.type, function: { name: tc.function?.name ?? "", arguments: tc.function?.arguments ?? "" } };
-                    } else if (tc.function?.arguments) {
-                      toolCalls[tc.index].function.arguments += tc.function.arguments;
+                    const idx = typeof tc.index === "number" ? tc.index : toolCalls.length;
+                    if (!toolCalls[idx]) {
+                      toolCalls[idx] = {
+                        id: tc.id || `call_${Date.now()}_${idx}`,
+                        type: tc.type || "function",
+                        function: {
+                          name: tc.function?.name ?? "",
+                          arguments: tc.function?.arguments ?? "",
+                        },
+                      };
+                    } else {
+                      if (tc.id) toolCalls[idx].id = tc.id;
+                      if (tc.type) toolCalls[idx].type = tc.type;
+                      if (tc.function?.name) toolCalls[idx].function.name += tc.function.name;
+                      if (tc.function?.arguments) toolCalls[idx].function.arguments += tc.function.arguments;
                     }
                   }
                 }

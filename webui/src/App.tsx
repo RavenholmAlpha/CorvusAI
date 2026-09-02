@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { eventUrl, getRuntimeCapabilities, getState, type RuntimeCapabilities } from "./api";
 import type { WebState } from "./types";
-import { TapeDeckReels, ToastContainer, toast } from "./components";
+import { TapeDeckReels, ToastContainer, ZoomControl, toast } from "./components";
 import { OverviewPage } from "./pages/OverviewPage";
 import { ChatPage } from "./pages/ChatPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
@@ -111,6 +111,74 @@ function AppContent() {
   const [error, setError] = useState("");
   const [capabilities, setCapabilities] = useState<RuntimeCapabilities | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    const saved = localStorage.getItem("corvus_sidebar_width");
+    return saved ? Number(saved) : 240;
+  });
+  const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+
+  // UI Scale / Zoom State (persisted)
+  const [zoom, setZoom] = useState<number>(() => {
+    const saved = localStorage.getItem("corvus_ui_zoom");
+    return saved ? Number(saved) : 100;
+  });
+
+  useEffect(() => {
+    const scale = zoom / 100;
+    (document.documentElement.style as any).zoom = String(scale);
+    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    localStorage.setItem("corvus_ui_zoom", String(zoom));
+  }, [zoom]);
+
+  // Global Keyboard Shortcuts for Zoom
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
+        e.preventDefault();
+        setZoom((prev) => Math.min(180, prev + 5));
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.key === "_")) {
+        e.preventDefault();
+        setZoom((prev) => Math.max(60, prev - 5));
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "0" || e.key === "Digit0")) {
+        e.preventDefault();
+        setZoom(100);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  const startSidebarResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizingSidebar(true);
+    const startX = e.clientX;
+    const startW = sidebarWidth;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = Math.max(160, Math.min(480, startW + (moveEvent.clientX - startX)));
+      setSidebarWidth(newWidth);
+      document.documentElement.style.setProperty("--sidebar-width", `${newWidth}px`);
+    };
+
+    const onMouseUp = () => {
+      setIsResizingSidebar(false);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      setSidebarWidth((latest) => {
+        localStorage.setItem("corvus_sidebar_width", String(latest));
+        return latest;
+      });
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const resetSidebarResize = () => {
+    setSidebarWidth(240);
+    localStorage.setItem("corvus_sidebar_width", "240");
+    document.documentElement.style.setProperty("--sidebar-width", "240px");
+  };
 
   const reload = async () => {
     try {
@@ -194,7 +262,10 @@ function AppContent() {
   const isRunning = activeTaskCount > 0;
 
   return (
-    <div className={"shell " + (sidebarOpen ? "sidebar-open" : "")}>
+    <div
+      className={"shell " + (sidebarOpen ? "sidebar-open" : "")}
+      style={{ gridTemplateColumns: `${sidebarWidth}px 4px minmax(0, 1fr)` }}
+    >
       {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
       <aside>
         <div className="brand">
@@ -242,6 +313,14 @@ function AppContent() {
         </footer>
       </aside>
 
+      {/* Main Sidebar Resizer */}
+      <div
+        className={"sidebar-resizer " + (isResizingSidebar ? "resizing" : "")}
+        onMouseDown={startSidebarResize}
+        onDoubleClick={resetSidebarResize}
+        title="拖动调整侧边栏宽度，双击恢复默认 (240px)"
+      />
+
       <main className={page === "chat" ? "main chat-main" : "main"}>
         {page !== "chat" && (
           <header className="top">
@@ -260,6 +339,9 @@ function AppContent() {
             </div>
 
             <div className="top-actions">
+              {/* UI Scale / Zoom Controller */}
+              <ZoomControl zoom={zoom} onZoomChange={setZoom} />
+
               <div className="transport-meter">
                 <span className={"transport-led " + (isRunning ? "rec" : "play")}>
                   {t(isRunning ? "app.recording" : "app.playing")}

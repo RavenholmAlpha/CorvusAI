@@ -178,3 +178,92 @@ export function ToastContainer() {
     </div>
   );
 }
+
+export function ZoomControl({
+  zoom,
+  onZoomChange,
+}: {
+  zoom: number;
+  onZoomChange: (zoom: number) => void;
+}) {
+  const { t } = useI18n();
+  const [openPresets, setOpenPresets] = useState(false);
+  const presets = [70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 125, 135, 150];
+
+  useEffect(() => {
+    const handleClose = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest(".zoom-controller")) {
+        setOpenPresets(false);
+      }
+    };
+    if (openPresets) {
+      window.addEventListener("click", handleClose);
+      return () => window.removeEventListener("click", handleClose);
+    }
+  }, [openPresets]);
+
+  return (
+    <div className="zoom-controller" style={{ position: "relative" }}>
+      <button
+        type="button"
+        className="zoom-btn"
+        onClick={() => onZoomChange(Math.max(60, zoom - 5))}
+        title={t("app.zoomOut") || "Zoom Out (-5%) [Ctrl -]"}
+      >
+        －
+      </button>
+      <span
+        className="zoom-badge"
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpenPresets((prev) => !prev);
+        }}
+        title={t("app.zoomPresets") || "Click to choose zoom level"}
+      >
+        {zoom}%
+      </span>
+      <button
+        type="button"
+        className="zoom-btn"
+        onClick={() => onZoomChange(Math.min(180, zoom + 5))}
+        title={t("app.zoomIn") || "Zoom In (+5%) [Ctrl +]"}
+      >
+        ＋
+      </button>
+      {zoom !== 100 && (
+        <button
+          type="button"
+          className="zoom-btn"
+          onClick={() => onZoomChange(100)}
+          title={t("app.zoomReset") || "Reset zoom (100%) [Ctrl 0]"}
+          style={{ color: "var(--amber)", fontSize: "10px" }}
+        >
+          ⟲
+        </button>
+      )}
+
+      {openPresets && (
+        <div className="zoom-presets-menu" onClick={(e) => e.stopPropagation()}>
+          <div style={{ font: "9px var(--font-mono)", color: "var(--amber)", padding: "2px 6px", borderBottom: "1px dashed var(--border-dark)" }}>
+            UI SCALE
+          </div>
+          {presets.map((val) => (
+            <button
+              key={val}
+              type="button"
+              className={"zoom-preset-item " + (zoom === val ? "active" : "")}
+              onClick={() => {
+                onZoomChange(val);
+                setOpenPresets(false);
+              }}
+            >
+              <span>{val}%</span>
+              {val === 100 && <span style={{ fontSize: "9px", opacity: 0.7 }}>[DEF]</span>}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

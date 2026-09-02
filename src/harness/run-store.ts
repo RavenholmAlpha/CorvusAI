@@ -494,14 +494,18 @@ export class RunStore {
     return memory;
   }
 
-  listProjectMemories(projectId: string, limit = 20): ProjectMemoryRow[] {
+  listProjectMemories(projectId?: string, limit = 100): ProjectMemoryRow[] {
+    if (!projectId) {
+      return this.db.prepare("select id, project_id, task_id, kind, title, content, confidence, status, scope, source_type, source_id, content_hash, verified, sensitivity, created_at, updated_at from project_memories where status = 'active' order by updated_at desc limit ?")
+        .all(limit).map((row) => mapProjectMemoryRow(row as ProjectMemoryDbRow));
+    }
     return this.db.prepare("select id, project_id, task_id, kind, title, content, confidence, status, scope, source_type, source_id, content_hash, verified, sensitivity, created_at, updated_at from project_memories where project_id = ? and status = 'active' order by updated_at desc limit ?")
       .all(projectId, limit).map((row) => mapProjectMemoryRow(row as ProjectMemoryDbRow));
   }
 
   searchProjectMemories(query: string, projectId?: string, limit = 20, options: { includeSensitive?: boolean; scopes?: ProjectMemoryRow["scope"][] } = {}): ProjectMemoryRow[] {
     const tokens = query.normalize("NFKC").replace(/["'()*:^{}\[\]<>|~+\-]/g, " ").split(/\s+/).filter((token) => token.length > 1).slice(0, 12);
-    if (tokens.length === 0) return projectId ? this.listProjectMemories(projectId, limit) : [];
+    if (tokens.length === 0) return this.listProjectMemories(projectId, limit);
     const match = tokens.map((token) => `"${token.replace(/"/g, "")}"`).join(" OR ");
     const projectFilter = projectId ? "and pm.project_id = ?" : "";
     const scopes = options.scopes ?? ["project"]; const placeholders = scopes.map(() => "?").join(",");
@@ -524,7 +528,10 @@ export class RunStore {
     this.db.prepare("insert or ignore into memory_links (memory_id, related_memory_id, relation, created_at) values (?, ?, ?, ?)").run(memoryId, relatedMemoryId, relation, nowIso());
   }
 
-  listProjectMemoryLinks(projectId: string): Array<{ memoryId: string; relatedMemoryId: string; relation: string }> {
+  listProjectMemoryLinks(projectId?: string): Array<{ memoryId: string; relatedMemoryId: string; relation: string }> {
+    if (!projectId) {
+      return this.db.prepare("select ml.memory_id as memoryId, ml.related_memory_id as relatedMemoryId, ml.relation from memory_links ml join project_memories pm on pm.id = ml.memory_id").all() as Array<{ memoryId: string; relatedMemoryId: string; relation: string }>;
+    }
     return this.db.prepare("select ml.memory_id as memoryId, ml.related_memory_id as relatedMemoryId, ml.relation from memory_links ml join project_memories pm on pm.id = ml.memory_id where pm.project_id = ?").all(projectId) as Array<{ memoryId: string; relatedMemoryId: string; relation: string }>;
   }
 
