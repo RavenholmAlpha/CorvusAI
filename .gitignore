@@ -15,5 +15,6 @@ pi-main/
 .v020-smoke/
 .v021-smoke/
 .v022-smoke/
+.v030-smoke/
 *.tgz
 /codex/
