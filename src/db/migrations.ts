@@ -206,6 +206,32 @@ function ensureCompatibilityColumns(db: CorvusDatabase, createdAt: string): void
   if (tableExists(db, "memory_embeddings") && !tableHasColumn(db, "memory_embeddings", "updated_at")) {
     db.exec("alter table memory_embeddings add column updated_at text not null default '1970-01-01T00:00:00.000Z'");
   }
+  if (!tableExists(db, "users")) {
+    db.exec(`
+      create table if not exists users (
+        id text primary key,
+        username text unique not null,
+        password_hash text not null,
+        salt text not null,
+        role text not null default 'collaborator',
+        allowed_projects_json text not null default '[]',
+        created_at text not null,
+        updated_at text not null
+      );
+      create index if not exists idx_users_username on users(username);
+    `);
+  }
+  if (!tableExists(db, "user_tokens")) {
+    db.exec(`
+      create table if not exists user_tokens (
+        token text primary key,
+        user_id text not null references users(id) on delete cascade,
+        created_at text not null,
+        last_used_at text not null
+      );
+      create index if not exists idx_user_tokens_user on user_tokens(user_id);
+    `);
+  }
 }
 
 function shouldRebuildColumn(db: CorvusDatabase, table: string, column: string): boolean {

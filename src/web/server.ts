@@ -6,6 +6,8 @@ import type { EventLog } from "../harness/event-log.js";
 import type { EvidenceStore } from "../harness/evidence-store.js";
 import type { CorvusDatabase } from "../db/connection.js";
 import { getConfigRoot, getGlobalSkillsRoot } from "../config.js";
+import { WebAuthStore } from "../db/auth-store.js";
+import { UserStore, type SafeUser, type UserRole } from "../db/user-store.js";
 import { join } from "node:path";
 import { mkdir, readFile } from "node:fs/promises";
 import { createManagedSkill, deleteManagedSkill, loadSkills } from "../skills.js";
@@ -119,11 +121,14 @@ function routeFeature(pathname: string): string | undefined {
 
 function capabilityPages(features: string[]): Array<{ id: string; enabled: boolean; feature?: string }> {
   const required: Record<string,string> = { agents: "delegation", tasks: "delegation", memory: "memory", skills: "skills", automations: "scheduler", channels: "channels", routing: "workspaces", browser: "browser", nodes: "execution-nodes", integrations: "mcp-client" };
-  return ["overview","chat","projects","agents","tasks","approvals","memory","timeline","skills","automations","channels","routing","browser","nodes","integrations","installation","secrets","settings"].map((id)=>({id,enabled:!required[id]||features.includes(required[id]),...(required[id]?{feature:required[id]}:{})}));
+  return ["overview","chat","projects","agents","tasks","approvals","memory","timeline","skills","automations","channels","routing","browser","nodes","integrations","installation","secrets","team","settings"].map((id)=>({id,enabled:!required[id]||features.includes(required[id]),...(required[id]?{feature:required[id]}:{})}));
 }
 
 export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{ url: string; accessUrl: string; close: () => Promise<void> }> {
-  const accessToken = randomUUID().replace(/-/g, "");
+  const authStore = options.db ? new WebAuthStore(options.db) : null;
+  const userStore = options.db ? new UserStore(options.db) : null;
+  const persistentToken = authStore?.getPersistentToken();
+  const accessToken = persistentToken || randomUUID().replace(/-/g, "");
   const host = options.host ?? "127.0.0.1";
   const port = options.port ?? 3081;
   const operationListeners = new Map<string, Set<ServerResponse>>();
@@ -164,11 +169,39 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
           }
         }
       }
+      const supplied = req.headers["x-corvus-token"] ?? requestUrl.searchParams.get("token");
+      const currentUser: SafeUser | null = userStore ? userStore.getUserByToken(String(supplied)) : null;
+      const isMasterToken = supplied === accessToken || Boolean(authStore?.validateToken(String(supplied)));
+      const isAuthenticated = Boolean(currentUser || isMasterToken);
+      const isAdmin = options.auth === false || Boolean(currentUser?.role === "admin" || (!currentUser && isMasterToken));
+
       if (options.auth !== false && requestUrl.pathname.startsWith("/api/")) {
-        const supplied = req.headers["x-corvus-token"] ?? requestUrl.searchParams.get("token");
-        if (supplied !== accessToken) { send(res, 401, { error: "Unauthorized" }); return; }
-        const origin = req.headers.origin;
-        if (origin && origin !== "http://" + host + ":" + (server.address() as any)?.port) { send(res, 403, { error: "Origin rejected" }); return; }
+        const isAuthRoute = requestUrl.pathname.startsWith("/api/auth/");
+        const isWebhookRoute = requestUrl.pathname.startsWith("/api/webhooks/") || Boolean(requestUrl.pathname.match(/^\/api\/channels\/[^/]+\/inbound$/));
+        if (!isAuthRoute && !isWebhookRoute) {
+          if (!isAuthenticated) { send(res, 401, { error: "Unauthorized" }); return; }
+          const origin = req.headers.origin;
+          if (origin) {
+            const reqHost = req.headers.host;
+            const allowedOrigin = host === "0.0.0.0"
+              ? (reqHost && (origin === `http://${reqHost}` || origin === `https://${reqHost}`))
+              : origin === "http://" + host + ":" + (server.address() as any)?.port;
+            if (!allowedOrigin && host !== "0.0.0.0") { send(res, 403, { error: "Origin rejected" }); return; }
+          }
+          const isAdminRoute =
+            requestUrl.pathname.startsWith("/api/users") ||
+            requestUrl.pathname === "/api/config" ||
+            requestUrl.pathname.startsWith("/api/v1/secrets") ||
+            requestUrl.pathname.startsWith("/api/v1/bundles") ||
+            requestUrl.pathname.startsWith("/api/providers") ||
+            requestUrl.pathname.startsWith("/api/routing") ||
+            (requestUrl.pathname.startsWith("/api/channels") && req.method !== "GET");
+
+          if (isAdminRoute && !isAdmin) {
+            send(res, 403, { error: "Forbidden: Administrator privileges required" });
+            return;
+          }
+        }
       }
       if (requestUrl.pathname === "/" || requestUrl.pathname.startsWith("/assets/")) {
         const relativePath = requestUrl.pathname === "/" ? "index.html" : requestUrl.pathname.slice(1);
@@ -231,20 +264,196 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       if(pluginAction&&req.method==="POST"){if(!options.pluginManagement)throw new Error("Plugin management unavailable");const body=await readJson(req);const id=decodeURIComponent(pluginAction[1]);if(pluginAction[2]==="enable")await options.pluginManagement.enable(id);else if(pluginAction[2]==="disable")await options.pluginManagement.disable(id);else if(pluginAction[2]==="grant")await options.pluginManagement.grant(id,(body.capabilities as string[])??[]);else if(pluginAction[2]==="revoke")await options.pluginManagement.revoke(id,(body.capabilities as string[])??[]);else await options.pluginManagement.configure(id,body.config??{});send(res,200,{ok:true,restartRequired:true});return;}
       if (requestUrl.pathname === "/api/v1/agents/tree" && req.method === "GET") { send(res,200,buildAgentHierarchy(options.runs));return; }
       if (requestUrl.pathname === "/api/v1/dispatches" && req.method === "POST") { const body=await readJson(req);const target=body.target as Record<string,unknown>|undefined;const kind=String(target?.kind??""),id=target?.id?String(target.id):undefined,prompt=String(body.prompt??"").trim(),description=body.description?String(body.description):undefined,roleId=body.roleId?String(body.roleId):undefined,mode=String(body.mode??"message");if(!prompt)throw new Error("Dispatch prompt is required");let result:unknown;if(kind==="global"){if(!options.orchestrate)throw new Error("Global orchestrator unavailable");result=await options.orchestrate(prompt);}else if(kind==="project"&&id){if(!options.dispatchProjectMessage)throw new Error("Project dispatch unavailable");result=await options.dispatchProjectMessage(id,prompt,roleId);}else if(kind==="session"&&id){if(mode==="spawn"){if(!options.spawnSessionTask)throw new Error("Session task spawning unavailable");result=await options.spawnSessionTask(id,prompt,description,roleId);}else{if(!options.dispatchSessionMessage)throw new Error("Session dispatch unavailable");result=await options.dispatchSessionMessage(id,prompt,roleId);}}else throw new Error("Dispatch target must be global, project or session");options.events?.append("dispatch.accepted",{kind,id,prompt,description,roleId,mode});send(res,202,result);return; }
+      if (requestUrl.pathname === "/api/users" && req.method === "GET") {
+        if (!userStore) throw new Error("Database required");
+        send(res, 200, userStore.listUsers());
+        return;
+      }
+      if (requestUrl.pathname === "/api/users" && req.method === "POST") {
+        if (!userStore) throw new Error("Database required");
+        const body = await readJson(req);
+        const newUser = userStore.createUser({
+          username: String(body.username ?? ""),
+          password: String(body.password ?? ""),
+          role: body.role === "admin" ? "admin" : "collaborator",
+          allowedProjectIds: Array.isArray(body.allowedProjectIds) ? body.allowedProjectIds.map(String) : [],
+        });
+        send(res, 201, newUser);
+        return;
+      }
+      const userMatch = requestUrl.pathname.match(/^\/api\/users\/([^/]+)$/);
+      if (userMatch) {
+        const userId = decodeURIComponent(userMatch[1]);
+        if (req.method === "PUT") {
+          if (!userStore) throw new Error("Database required");
+          const body = await readJson(req);
+          const updated = userStore.updateUser(userId, {
+            role: body.role as UserRole | undefined,
+            allowedProjectIds: Array.isArray(body.allowedProjectIds) ? body.allowedProjectIds.map(String) : undefined,
+            password: body.password ? String(body.password) : undefined,
+          });
+          send(res, 200, updated);
+          return;
+        }
+        if (req.method === "DELETE") {
+          if (!userStore) throw new Error("Database required");
+          userStore.deleteUser(userId);
+          send(res, 200, { ok: true, id: userId });
+          return;
+        }
+      }
+      if (requestUrl.pathname === "/api/auth/status" && req.method === "GET") {
+        send(res, 200, {
+          initialized: Boolean(authStore?.isInitialized() || userStore?.isInitialized()),
+          authenticated: isAuthenticated && Boolean(supplied),
+          authRequired: options.auth !== false,
+          user: currentUser ?? (isAdmin && supplied ? { id: "admin", username: "admin", role: "admin", allowedProjectIds: ["*"], createdAt: "", updatedAt: "" } : null),
+        });
+        return;
+      }
+      if (requestUrl.pathname === "/api/auth/setup" && req.method === "POST") {
+        if (!authStore) throw new Error("Database not available for auth setup");
+        if (authStore.isInitialized() || userStore?.isInitialized()) {
+          send(res, 400, { error: "Password already initialized. Please login." });
+          return;
+        }
+        const body = await readJson(req);
+        const password = String(body.password ?? "");
+        if (!password || password.length < 4) {
+          send(res, 400, { error: "Password must be at least 4 characters long" });
+          return;
+        }
+        const { token } = authStore.setPassword(password);
+        try {
+          userStore?.createUser({ username: "admin", password, role: "admin", allowedProjectIds: ["*"] });
+        } catch {}
+        send(res, 200, { ok: true, token });
+        return;
+      }
+      if (requestUrl.pathname === "/api/auth/login" && req.method === "POST") {
+        const body = await readJson(req);
+        const username = String(body.username || "admin").trim();
+        const password = String(body.password ?? "");
+        if (userStore && userStore.isInitialized()) {
+          const result = userStore.verifyPassword(username, password);
+          if (result.ok && result.token) {
+            send(res, 200, { ok: true, token: result.token, user: result.user });
+            return;
+          }
+        }
+        if (!authStore || !authStore.isInitialized()) {
+          if (password === accessToken) {
+            send(res, 200, { ok: true, token: accessToken });
+            return;
+          }
+          send(res, 400, { error: "No password configured. Please set a password first." });
+          return;
+        }
+        const result = authStore.verifyPassword(password);
+        if (!result.ok || !result.token) {
+          send(res, 401, { error: "Invalid username or password" });
+          return;
+        }
+        if (userStore) {
+          try {
+            const admin = userStore.getUserByUsername("admin");
+            if (admin) {
+              userStore.updateUser(admin.id, { password });
+            } else {
+              userStore.createUser({ username: "admin", password, role: "admin", allowedProjectIds: ["*"] });
+            }
+          } catch {}
+        }
+        send(res, 200, { ok: true, token: result.token });
+        return;
+      }
+      if (requestUrl.pathname === "/api/auth/change-password" && req.method === "POST") {
+        if (!authStore) throw new Error("Database not available");
+        const body = await readJson(req);
+        const oldPassword = String(body.oldPassword ?? "");
+        const newPassword = String(body.newPassword ?? "");
+        if (authStore.isInitialized()) {
+          const verify = authStore.verifyPassword(oldPassword);
+          if (!verify.ok) {
+            send(res, 401, { error: "Incorrect current password" });
+            return;
+          }
+        }
+        if (!newPassword || newPassword.length < 4) {
+          send(res, 400, { error: "New password must be at least 4 characters long" });
+          return;
+        }
+        const { token } = authStore.setPassword(newPassword);
+        send(res, 200, { ok: true, token });
+        return;
+      }
       if (requestUrl.pathname === "/api/state" && req.method === "GET") {
-        const projects = options.runs.listProjects();
-        const activeProjectId = options.activeProjectId?.() ?? projects[0]?.id;
+        const allProjects = options.runs.listProjects();
+        const allowedProjects = isAdmin
+          ? allProjects
+          : allProjects.filter((p) => currentUser?.allowedProjectIds.includes(p.id) || currentUser?.allowedProjectIds.includes("*"));
+
+        const activeProjectId = (allowedProjects.find((p) => p.id === options.activeProjectId?.())?.id) ?? allowedProjects[0]?.id;
         const active = activeProjectId ? options.runs.getProject(activeProjectId) : undefined;
         const skills = [...(await loadSkills(getGlobalSkillsRoot(), active?.path)).values()].map((skill) => ({ id: skill.id, name: skill.name, title: skill.title, description: skill.description, triggers: skill.triggers, toolsRequired: skill.toolsRequired, tier: skill.tier, isBuiltin: skill.isBuiltin, source: skill.source }));
         const usageEvents = options.events?.listRecent(1000).filter((event) => event.type === "model.usage") ?? [];
         const usage = usageEvents.reduce((total, event) => ({ promptTokens: total.promptTokens + Number(event.payload.promptTokens ?? 0), completionTokens: total.completionTokens + Number(event.payload.completionTokens ?? 0), requests: total.requests + 1 }), { promptTokens: 0, completionTokens: 0, requests: 0 });
-        const masterSessions = options.runs.listMasterSessions();
-        const masterSessionId = options.runs.getLatestMasterSession()?.id ?? null;
+        const masterSessions = isAdmin ? options.runs.listMasterSessions() : [];
+        const masterSessionId = isAdmin ? (options.runs.getLatestMasterSession()?.id ?? null) : null;
         const activeOperations: Record<string, string> = {};
         for (const [opId, sId] of operationSessionIds) {
           if (operationControllers.has(opId)) activeOperations[sId] = opId;
         }
-        send(res, 200, { activeOperations, activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model }, plugins: options.plugins ?? [], mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })), usage, webLocale: options.config.webLocale ?? "en", maxToolRounds: options.config.maxToolRounds, contextOverflowMode: options.config.contextOverflowMode, permissionPreset: options.config.installation?.permissionPreset ?? "balanced", maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0, loopProtection: Boolean(options.config.loopProtection), browser: options.config.browser ?? {}, executionNodes: options.config.executionNodes ?? {}, deliveries: options.channelDeliveries?.list(50) ?? [], skills, timeline: options.events?.listRecent(50) ?? [], artifacts: options.evidence?.listRecent(50) ?? [], diagnostics: validateConfig(options.config), automations: options.config.automations ?? {}, automationStates: options.automationStates?.() ?? [], routingRules: options.config.routingRules ?? {}, channels: redactSecrets(options.config.channels ?? {}), activeProjectId, projects, providers: redactSecrets(options.config.providers ?? {}), roles: options.config.agentRoles ?? {}, mainProviderId: options.config.mainProviderId, tasks: options.runs.listSubagentTasks(), allSessions: options.runs.listSessions(), masterSessions, masterSessionId, approvals: options.approvals.listPending().map((approval) => ({ ...approval, sessionId: options.runs.getRun(approval.runId)?.sessionId ?? null, toolCall: options.getToolCall?.(approval.toolCallId) })), sessions: active ? options.runs.listSessions(active.id) : [], memories: options.runs.listProjectMemories(undefined, 500), memoryLinks: options.runs.listProjectMemoryLinks(undefined) });
+
+        const rawAllSessions = options.runs.listSessions();
+        const allSessions = isAdmin
+          ? rawAllSessions
+          : rawAllSessions.filter((s) => s.projectId && (currentUser?.allowedProjectIds.includes(s.projectId) || currentUser?.allowedProjectIds.includes("*")));
+        const sessions = active ? (isAdmin || currentUser?.allowedProjectIds.includes(active.id) ? options.runs.listSessions(active.id) : []) : [];
+
+        const rawTasks = options.runs.listSubagentTasks();
+        const tasks = isAdmin
+          ? rawTasks
+          : rawTasks.filter((t) => !t.projectId || currentUser?.allowedProjectIds.includes(t.projectId) || currentUser?.allowedProjectIds.includes("*"));
+
+        send(res, 200, {
+          currentUser: currentUser ?? (isAdmin && supplied ? { id: "admin", username: "admin", role: "admin", allowedProjectIds: ["*"], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } : null),
+          activeOperations,
+          activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model },
+          plugins: options.plugins ?? [],
+          mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })),
+          usage,
+          webLocale: options.config.webLocale ?? "en",
+          maxToolRounds: options.config.maxToolRounds,
+          contextOverflowMode: options.config.contextOverflowMode,
+          permissionPreset: options.config.installation?.permissionPreset ?? "balanced",
+          maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0,
+          loopProtection: Boolean(options.config.loopProtection),
+          browser: options.config.browser ?? {},
+          executionNodes: options.config.executionNodes ?? {},
+          deliveries: options.channelDeliveries?.list(50) ?? [],
+          skills,
+          timeline: options.events?.listRecent(50) ?? [],
+          artifacts: options.evidence?.listRecent(50) ?? [],
+          diagnostics: validateConfig(options.config),
+          automations: options.config.automations ?? {},
+          automationStates: options.automationStates?.() ?? [],
+          routingRules: options.config.routingRules ?? {},
+          channels: redactSecrets(options.config.channels ?? {}),
+          activeProjectId,
+          projects: allowedProjects,
+          providers: redactSecrets(options.config.providers ?? {}),
+          roles: options.config.agentRoles ?? {},
+          mainProviderId: options.config.mainProviderId,
+          tasks,
+          allSessions,
+          masterSessions,
+          masterSessionId,
+          approvals: options.approvals.listPending().map((approval) => ({ ...approval, sessionId: options.runs.getRun(approval.runId)?.sessionId ?? null, toolCall: options.getToolCall?.(approval.toolCallId) })),
+          sessions,
+          memories: options.runs.listProjectMemories(undefined, 500),
+          memoryLinks: options.runs.listProjectMemoryLinks(undefined),
+        });
         return;
       }
       if (requestUrl.pathname === "/api/projects" && req.method === "POST") {
@@ -563,6 +772,31 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         options.config.channels = { ...(options.config.channels ?? {}), [id]: { id, type: (["webhook", "telegram", "slack", "discord"].includes(String(body.type)) ? String(body.type) : "webhook") as any, enabled: body.enabled !== false, projectId: body.projectId ? String(body.projectId) : undefined, roleId: body.roleId ? String(body.roleId) : undefined, tokenRef: body.tokenRef ? String(body.tokenRef) : undefined, useOrchestrator: body.useOrchestrator === true || body.useOrchestrator === "true", outboundUrl: body.outboundUrl ? String(body.outboundUrl) : undefined, credentialRef: body.credentialRef ? String(body.credentialRef) : undefined, targetId: body.targetId ? String(body.targetId) : undefined, allowedUsers: body.allowedUsers ? String(body.allowedUsers).split(",").map(item=>item.trim()).filter(Boolean) : undefined, allowedTenants: body.allowedTenants ? String(body.allowedTenants).split(",").map(item=>item.trim()).filter(Boolean) : undefined } };
         await options.saveConfig(); send(res, 201, redactSecrets(options.config.channels[id])); return;
       }
+      const channelActionMatch = requestUrl.pathname.match(/^\/api\/channels\/([^/]+)(?:\/(toggle))?$/);
+      if (channelActionMatch) {
+        const channelId = decodeURIComponent(channelActionMatch[1]);
+        const subAction = channelActionMatch[2];
+        if (req.method === "DELETE") {
+          if (options.config.channels && options.config.channels[channelId]) {
+            delete options.config.channels[channelId];
+            await options.saveConfig();
+            send(res, 200, { ok: true, id: channelId });
+            return;
+          }
+          send(res, 404, { error: "Channel not found" });
+          return;
+        }
+        if (subAction === "toggle" && req.method === "POST") {
+          if (options.config.channels && options.config.channels[channelId]) {
+            options.config.channels[channelId].enabled = options.config.channels[channelId].enabled === false;
+            await options.saveConfig();
+            send(res, 200, redactSecrets(options.config.channels[channelId]));
+            return;
+          }
+          send(res, 404, { error: "Channel not found" });
+          return;
+        }
+      }
       if (requestUrl.pathname === "/api/routing" && req.method === "POST") {
         const body = await readJson(req);
         const id = String(body.id);
@@ -705,9 +939,13 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
     server.listen(port, host, () => {
       const address = server.address();
       const actualPort = typeof address === "object" && address ? address.port : port;
+      const isPasswordSet = Boolean(authStore?.isInitialized());
+      const displayHost = host === "0.0.0.0" ? "127.0.0.1" : host;
+      const cleanUrl = "http://" + displayHost + ":" + actualPort + "/";
+      const accessUrl = isPasswordSet ? cleanUrl : cleanUrl + "?token=" + accessToken;
       resolve({
-        url: "http://" + host + ":" + actualPort + "/",
-        accessUrl: "http://" + host + ":" + actualPort + "/?token=" + accessToken,
+        url: cleanUrl,
+        accessUrl,
         close: () => new Promise((done, fail) => { unsubscribeRuntimeEvents?.(); server.closeAllConnections(); server.close((error) => error ? fail(error) : done()); }),
       });
     });

@@ -265,4 +265,24 @@ create index if not exists idx_settings_updated_at on settings(updated_at);
 create index if not exists idx_state_snapshots_run_id_created_at on state_snapshots(run_id, created_at);
 create table if not exists context_checkpoints (id text primary key, session_id text not null references sessions(id) on delete cascade, summary text not null, source_message_count integer not null, content_hash text not null, created_at text not null);
 create index if not exists idx_context_checkpoints_session_created on context_checkpoints(session_id, created_at desc);
+
+create table if not exists users (
+  id text primary key,
+  username text unique not null,
+  password_hash text not null,
+  salt text not null,
+  role text not null default 'collaborator',
+  allowed_projects_json text not null default '[]',
+  created_at text not null,
+  updated_at text not null
+);
+create index if not exists idx_users_username on users(username);
+
+create table if not exists user_tokens (
+  token text primary key,
+  user_id text not null references users(id) on delete cascade,
+  created_at text not null,
+  last_used_at text not null
+);
+create index if not exists idx_user_tokens_user on user_tokens(user_id);
 `;

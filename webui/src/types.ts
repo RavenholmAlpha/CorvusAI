@@ -172,7 +172,19 @@ export interface SessionContextInfo {
   };
 }
 
+export type UserRole = "admin" | "collaborator";
+
+export interface SafeUser {
+  id: string;
+  username: string;
+  role: UserRole;
+  allowedProjectIds: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
 export interface WebState {
+  currentUser?: SafeUser | null;
   activeOperations?: Record<string, string>;
   activeConnection: {
     providerId: string | null;

@@ -106,6 +106,8 @@ export interface CorvusConfig {
   /** Behavior when switching a conversation to a model with a smaller context window. */
   contextOverflowMode?: "compact-with-previous-model" | "sliding-window";
   webLocale?: "en" | "zh-CN";
+  webHost?: string;
+  webPort?: number;
   /** Workbench theme preset name (see src/ui/theme.ts). Toggle at runtime with Ctrl+T. */
   theme: string;
   mcpServers?: Record<string, { command?: string; args?: string[]; env?: Record<string, string>; timeoutMs?: number; url?: string; headers?: Record<string,string>; bearerTokenRef?: string; oauth?: { authorizationEndpoint: string; tokenEndpoint: string; clientId: string; scopes?: string[]; secretName?: string } }>;

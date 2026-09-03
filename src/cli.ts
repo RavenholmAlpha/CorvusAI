@@ -34,6 +34,8 @@ import { setCodexTaskDispatcher, setMcpManager, setMemorySearcher, setRoleManage
 import { dispatchCodexTask } from "./codex/bridge.js";
 import { detectCodexCli } from "./codex/detector.js";
 import { ScopeLeaseCoordinator } from "./collaboration.js";
+import { WebAuthStore } from "./db/auth-store.js";
+import { UserStore } from "./db/user-store.js";
 import { startWebControlPlane } from "./web/server.js";
 import { AutomationScheduler } from "./automation.js";
 import { createManagedSkill, deleteManagedSkill, loadSkills, renderRoutedSkillContext } from "./skills.js";
@@ -87,8 +89,10 @@ interface CliArgs {
   web?: boolean;
   webOnly?: boolean;
   webPort?: number;
+  webHost?: string;
+  password?: string;
   restoreDb?: string;
-  command?: "mcp-serve" | "mcp-import" | "mcp-oauth" | "bundle" | "plugin" | "setup" | "doctor" | "secret" | "permission";
+  command?: "mcp-serve" | "mcp-import" | "mcp-oauth" | "bundle" | "plugin" | "setup" | "doctor" | "secret" | "permission" | "password";
   action?: string;
   value?: string;
   json?: boolean;
@@ -103,7 +107,7 @@ function parseArgs(argv: string[]): CliArgs {
       args.version = true;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
-    } else if (["bundle", "plugin", "setup", "doctor", "secret", "permission"].includes(arg)) {
+    } else if (["bundle", "plugin", "setup", "doctor", "secret", "permission", "password"].includes(arg)) {
       args.command = arg as CliArgs["command"];
       if (argv[i + 1] && !argv[i + 1].startsWith("--")) args.action = argv[++i];
       if (argv[i + 1] && !argv[i + 1].startsWith("--")) args.value = argv[++i];
@@ -134,6 +138,12 @@ function parseArgs(argv: string[]): CliArgs {
     } else if (arg === "--web-port") {
       args.webPort = Number(argv[i + 1] ?? 0) || undefined;
       i += 1;
+    } else if (arg === "--web-host" || arg === "--host") {
+      args.webHost = argv[i + 1];
+      i += 1;
+    } else if (arg === "--password") {
+      args.password = argv[i + 1];
+      i += 1;
     } else if (arg === "--restore-db") {
       args.restoreDb = argv[i + 1];
       i += 1;
@@ -155,6 +165,9 @@ Usage:
   corvus [options] [prompt]
   corvus --web                   Launch WebUI Control Plane
   corvus --web-only              Launch WebUI without interactive TUI
+  corvus --host 0.0.0.0          Listen on all network interfaces for public/server deployment
+  corvus password set <pwd>      Set or update persistent web access password in database
+  corvus password reset          Reset web access password
   corvus -p "prompt"             Run headless prompt
   corvus doctor                  Run system health and environment checks
   corvus bundle [plan|apply]     Manage bundle configuration
@@ -166,7 +179,9 @@ Options:
   -v, --version                  Print Corvus version
   -h, --help                     Show this help message
   -P, --project <dir>            Target specific project directory
-  --web-port <port>              Custom port for WebUI (default 3000)
+  --web-port <port>              Custom port for WebUI (default 3081)
+  --host, --web-host <host>      Bind host for WebUI (e.g. 0.0.0.0 for public access)
+  --password <pwd>               Specify administrator password during install/startup
   --auto-approve                 Auto-approve tool execution
 \n`);
     return;
@@ -255,6 +270,46 @@ Options:
   let mcpRuntimeCleanup: McpRuntimeManager | undefined;
   try {
     ensureDatabase(db);
+    const authStore = new WebAuthStore(db);
+    const userStore = new UserStore(db);
+    if (cliArgs.password) {
+      authStore.setPassword(cliArgs.password);
+      try {
+        const admin = userStore.getUserByUsername("admin");
+        if (admin) {
+          userStore.updateUser(admin.id, { password: cliArgs.password });
+        } else {
+          userStore.createUser({ username: "admin", password: cliArgs.password, role: "admin", allowedProjectIds: ["*"] });
+        }
+      } catch {}
+      process.stdout.write("Web access password updated in database.\n");
+    }
+    if (cliArgs.command === "password") {
+      const action = cliArgs.action ?? "status";
+      if (action === "set") {
+        const pwd = cliArgs.value ?? cliArgs.password ?? process.env.CORVUS_PASSWORD;
+        if (!pwd) throw new Error("Usage: corvus password set <password> (or set CORVUS_PASSWORD)");
+        authStore.setPassword(pwd);
+        try {
+          const admin = userStore.getUserByUsername("admin");
+          if (admin) {
+            userStore.updateUser(admin.id, { password: pwd });
+          } else {
+            userStore.createUser({ username: "admin", password: pwd, role: "admin", allowedProjectIds: ["*"] });
+          }
+        } catch {}
+        process.stdout.write("Web access password updated successfully in database.\n");
+        return;
+      }
+      if (action === "reset") {
+        authStore.resetPassword();
+        process.stdout.write("Web access password has been reset.\n");
+        return;
+      }
+      const isInit = authStore.isInitialized();
+      process.stdout.write(JSON.stringify({ initialized: isInit, message: isInit ? "Password configured in database" : "No password configured (using random token)" }, null, 2) + "\n");
+      return;
+    }
 
     const tools = new ToolRegistry(config.permissions);
     const featureByTool: Record<string,string> = { git_status: "git", web_fetch: "web", task: "delegation", parallel_tasks: "delegation", dispatch_project_task: "delegation", list_workspaces: "workspaces", register_workspace: "workspaces", search_global_memory: "memory" };
@@ -750,7 +805,7 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
       const pluginManagement = new PluginManagementService(getGlobalPluginsRoot(), config, () => saveConfig(config));
       const bundles = new BundleService(getConfigRoot(), config, () => saveConfig(config));
       webControl = await startWebControlPlane({
-        config, runs, approvals, browser, nodes, channelDeliveries, pluginManagement, bundles, indexMemory: (memory) => memoryEngine.index(memory), reloadAutomations: () => automationScheduler?.start(Object.values(config.automations ?? {})), runAutomation: async (id: string) => { const a = config.automations?.[id]; if (a) await automationScheduler?.runNow(a); }, plugins: loadedPlugins, listMcp: () => mcpRuntime.list(), reloadMcp: async () => { mcpResults = await mcpRuntime.reload(config.mcpServers ?? {}); return mcpResults; }, testMcp: (name, server) => mcpRuntime.test(name, server as never), getToolCall: (toolCallId) => queue.getToolCall(toolCallId), events, evidence, db, saveConfig: () => saveConfig(config), port: cliArgs.webPort,
+        config, runs, approvals, browser, nodes, channelDeliveries, pluginManagement, bundles, indexMemory: (memory) => memoryEngine.index(memory), reloadAutomations: () => automationScheduler?.start(Object.values(config.automations ?? {})), runAutomation: async (id: string) => { const a = config.automations?.[id]; if (a) await automationScheduler?.runNow(a); }, plugins: loadedPlugins, listMcp: () => mcpRuntime.list(), reloadMcp: async () => { mcpResults = await mcpRuntime.reload(config.mcpServers ?? {}); return mcpResults; }, testMcp: (name, server) => mcpRuntime.test(name, server as never), getToolCall: (toolCallId) => queue.getToolCall(toolCallId), events, evidence, db, saveConfig: () => saveConfig(config), port: cliArgs.webPort, host: cliArgs.webHost ?? process.env.CORVUS_HOST ?? config.webHost ?? "127.0.0.1",
         activeProjectId: () => project.id,
         selectProject,
         spawnSessionTask: async (sessionId, prompt, description, roleId) => { const target=runs.getSession(sessionId);if(!target)throw new Error("Session not found");return {content:await delegateSubagentTask(prompt,description??"Delegated child task",undefined,undefined,roleId,sessionId,target.projectId??undefined)}; },

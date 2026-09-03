@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from "react";
 import { Card, Modal, SimpleForm, toast } from "../components";
-import { getJson, postJson } from "../api";
+import { getJson, postJson, setWebToken, deleteJson, webToken } from "../api";
 import type { PageProps } from "./shared";
+import type { SafeUser, UserRole } from "../types";
 import { defineTranslations, useI18n } from "../i18n";
 
 defineTranslations({
@@ -760,6 +761,10 @@ export function SettingsPage({ state, reload }: PageProps) {
   const [rawOpen, setRawOpen] = useState(false);
   const [raw, setRaw] = useState("");
   const [permissionBusy, setPermissionBusy] = useState(false);
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [updatingPassword, setUpdatingPassword] = useState(false);
 
   const setPermissionMode = async (preset: "balanced" | "autonomous") => {
     setPermissionBusy(true);
@@ -1173,6 +1178,79 @@ export function SettingsPage({ state, reload }: PageProps) {
               {t("settings.security.raw")}
             </button>
           </div>
+        </Card>
+
+        <Card title="🔐 Web 访问密码与公网部署安全">
+          <p style={{ margin: "0 0 12px", fontSize: "12px", color: "var(--text-muted)" }}>
+            为 Corvus 工业控制台配置固定的访问密码。密码加密持久化保存在 SQLite 数据库中，每次重启服务不会重置，无需随机 Token，方便部署在公网或云服务器上直接访问。
+          </p>
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault();
+              if (newPassword.length < 4) {
+                toast.error("新密码长度不能少于 4 位");
+                return;
+              }
+              if (newPassword !== confirmNewPassword) {
+                toast.error("两次输入的新密码不一致");
+                return;
+              }
+              setUpdatingPassword(true);
+              try {
+                const res = await postJson<{ ok: boolean; token?: string }>("/api/auth/change-password", {
+                  oldPassword,
+                  newPassword,
+                });
+                if (res.token) {
+                  setWebToken(res.token);
+                }
+                setOldPassword("");
+                setNewPassword("");
+                setConfirmNewPassword("");
+                toast.success("访问密码已成功更新并保存至数据库！");
+              } catch (err: any) {
+                toast.error(err.message || "更新密码失败");
+              } finally {
+                setUpdatingPassword(false);
+              }
+            }}
+            style={{ display: "grid", gap: "10px", maxWidth: 440 }}
+          >
+            <label>
+              <span>当前密码（若此前未设置可留空）：</span>
+              <input
+                type="password"
+                value={oldPassword}
+                placeholder="当前访问密码"
+                onChange={(e) => setOldPassword(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>新访问密码：</span>
+              <input
+                type="password"
+                value={newPassword}
+                placeholder="新访问密码（至少 4 位）"
+                required
+                onChange={(e) => setNewPassword(e.target.value)}
+              />
+            </label>
+            <label>
+              <span>确认新访问密码：</span>
+              <input
+                type="password"
+                value={confirmNewPassword}
+                placeholder="再次输入新密码以确认"
+                required
+                onChange={(e) => setConfirmNewPassword(e.target.value)}
+              />
+            </label>
+            <div style={{ marginTop: "4px" }}>
+              <button className="primary" type="submit" disabled={updatingPassword}>
+                {updatingPassword ? "正在更新..." : "更新访问密码"}
+              </button>
+            </div>
+          </form>
         </Card>
       </div>
 

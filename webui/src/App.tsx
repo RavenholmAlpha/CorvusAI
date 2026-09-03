@@ -20,13 +20,15 @@ import { NodesPage } from "./pages/NodesPage";
 import { IntegrationsPage } from "./pages/IntegrationsPage";
 import { InstallationPage } from "./pages/InstallationPage";
 import { SecretsPage } from "./pages/SecretsPage";
+import { TeamPage } from "./pages/TeamPage";
+import { LoginPage } from "./pages/LoginPage";
 import { defineTranslations, I18nProvider, useI18n, type Locale } from "./i18n";
-import { postJson } from "./api";
+import { postJson, clearWebToken } from "./api";
 
 
 defineTranslations({
-  "app.group.core": { en: "CORE WORKBENCH", "zh-CN": "核心工作台" }, "app.group.agents": { en: "AGENTS & EXECUTION", "zh-CN": "智能体与执行" }, "app.group.knowledge": { en: "KNOWLEDGE & EXTENSIONS", "zh-CN": "知识与扩展" }, "app.group.gateway": { en: "GATEWAY & CONFIG", "zh-CN": "网关与配置" },
-  "app.page.chat": { en: "CHAT CONTROL", "zh-CN": "对话控制" }, "app.page.overview": { en: "OVERVIEW", "zh-CN": "概览" }, "app.page.projects": { en: "PROJECTS", "zh-CN": "项目" }, "app.page.agents": { en: "HIERARCHY", "zh-CN": "智能体层级" }, "app.page.tasks": { en: "TASKS", "zh-CN": "任务" }, "app.page.approvals": { en: "APPROVALS", "zh-CN": "审批" }, "app.page.timeline": { en: "TIMELINE", "zh-CN": "时间线" }, "app.page.memory": { en: "MEMORY", "zh-CN": "记忆" }, "app.page.skills": { en: "SKILLS", "zh-CN": "技能" }, "app.page.integrations": { en: "MCP & PLUGINS", "zh-CN": "MCP 与插件" }, "app.page.secrets": { en: "SECRETS", "zh-CN": "密钥" }, "app.page.channels": { en: "CHANNELS", "zh-CN": "通道" }, "app.page.automations": { en: "AUTOMATIONS", "zh-CN": "自动化" }, "app.page.routing": { en: "ROUTING", "zh-CN": "路由" }, "app.page.browser": { en: "BROWSER", "zh-CN": "浏览器" }, "app.page.nodes": { en: "NODES", "zh-CN": "节点" }, "app.page.installation": { en: "BUNDLES", "zh-CN": "功能包" }, "app.page.settings": { en: "SETTINGS", "zh-CN": "设置" },
+  "app.group.core": { en: "CORE WORKBENCH", "zh-CN": "核心工作台" }, "app.group.team": { en: "COLLABORATION", "zh-CN": "多人协同" }, "app.group.agents": { en: "AGENTS & EXECUTION", "zh-CN": "智能体与执行" }, "app.group.knowledge": { en: "KNOWLEDGE & EXTENSIONS", "zh-CN": "知识与扩展" }, "app.group.gateway": { en: "GATEWAY & CONFIG", "zh-CN": "网关与配置" },
+  "app.page.chat": { en: "CHAT CONTROL", "zh-CN": "对话控制" }, "app.page.overview": { en: "OVERVIEW", "zh-CN": "概览" }, "app.page.projects": { en: "PROJECTS", "zh-CN": "项目" }, "app.page.team": { en: "TEAM", "zh-CN": "多人协同" }, "app.page.agents": { en: "HIERARCHY", "zh-CN": "智能体层级" }, "app.page.tasks": { en: "TASKS", "zh-CN": "任务" }, "app.page.approvals": { en: "APPROVALS", "zh-CN": "审批" }, "app.page.timeline": { en: "TIMELINE", "zh-CN": "时间线" }, "app.page.memory": { en: "MEMORY", "zh-CN": "记忆" }, "app.page.skills": { en: "SKILLS", "zh-CN": "技能" }, "app.page.integrations": { en: "MCP & PLUGINS", "zh-CN": "MCP 与插件" }, "app.page.secrets": { en: "SECRETS", "zh-CN": "密钥" }, "app.page.channels": { en: "CHANNELS", "zh-CN": "通道" }, "app.page.automations": { en: "AUTOMATIONS", "zh-CN": "自动化" }, "app.page.routing": { en: "ROUTING", "zh-CN": "路由" }, "app.page.browser": { en: "BROWSER", "zh-CN": "浏览器" }, "app.page.nodes": { en: "NODES", "zh-CN": "节点" }, "app.page.installation": { en: "BUNDLES", "zh-CN": "功能包" }, "app.page.settings": { en: "SETTINGS", "zh-CN": "设置" },
   "app.brand": { en: "CORVUS", "zh-CN": "CORVUS" }, "app.badge": { en: "C-90 TAPE", "zh-CN": "C-90 磁带" }, "app.connecting": { en: "CONNECTING TO CORVUS DECK-01...", "zh-CN": "正在连接 CORVUS 控制台..." }, "app.controlPlane": { en: "DECK-01 // CONTROL PLANE", "zh-CN": "DECK-01 // 控制平面" }, "app.local": { en: "LOCAL // STEREO", "zh-CN": "本地 // 双声道" }, "app.projectsCount": { en: "{count} PROJECTS", "zh-CN": "{count} 个项目" }, "app.noWorkspace": { en: "NO ACTIVE WORKSPACE", "zh-CN": "没有活动工作区" }, "app.noProject": { en: "No active project", "zh-CN": "没有活动项目" }, "app.activeTape": { en: "[TAPE: {name}] {path}", "zh-CN": "[磁带：{name}] {path}" }, "app.recording": { en: "REC ●", "zh-CN": "录制 ●" }, "app.playing": { en: "PLAY ▶", "zh-CN": "播放 ▶" }, "app.sync": { en: "SYNC", "zh-CN": "同步" }, "app.refresh": { en: "Refresh system state", "zh-CN": "刷新系统状态" }, "app.dismiss": { en: "DISMISS", "zh-CN": "关闭" }, "app.menu": { en: "Toggle navigation menu", "zh-CN": "切换导航菜单" }, "app.fault": { en: "FAULT", "zh-CN": "故障" }
 });
 
@@ -34,6 +36,7 @@ const pages = [
   "overview",
   "chat",
   "projects",
+  "team",
   "agents",
   "tasks",
   "approvals",
@@ -94,6 +97,7 @@ const navGroups: NavGroup[] = [
       { id: "browser", icon: "🌍" },
       { id: "nodes", icon: "🖥️" },
       { id: "installation", icon: "📦" },
+      { id: "team", icon: "👥" },
       { id: "settings", icon: "⚙️" },
     ],
   },
@@ -109,6 +113,7 @@ function AppContent() {
   const [page, setPage] = useState<Page>(readPage);
   const [state, setState] = useState<WebState | null>(null);
   const [error, setError] = useState("");
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [capabilities, setCapabilities] = useState<RuntimeCapabilities | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -172,11 +177,24 @@ function AppContent() {
       const [nextState, nextCapabilities] = await Promise.all([getState(), getRuntimeCapabilities()]);
       setState(nextState);
       setCapabilities(nextCapabilities);
+      setAuthenticated(true);
       setError("");
-    } catch (reason) {
-      setError(String(reason));
-      toast.error(String(reason));
+    } catch (reason: any) {
+      const msg = String(reason?.message || reason);
+      if (msg.includes("Unauthorized") || msg.includes("401")) {
+        setAuthenticated(false);
+      } else {
+        setError(msg);
+        toast.error(msg);
+      }
     }
+  };
+
+  const handleLogout = () => {
+    clearWebToken();
+    setAuthenticated(false);
+    setState(null);
+    toast.info("已安全退出登录");
   };
 
   useEffect(() => {
@@ -229,21 +247,27 @@ function AppContent() {
     setPage(next);
   };
 
+  if (authenticated === false) {
+    return <LoginPage onLogin={() => { setAuthenticated(true); void reload(); }} />;
+  }
+
   if (!state) {
     return (
       <div className="center">
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "16px" }}>
-          <TapeDeckReels active />
-          <span>{t("app.connecting")}</span>
-          {error && <span style={{ color: "var(--led-red)", fontSize: "12px" }}>{error}</span>}
-        </div>
+        <TapeDeckReels active />
+        <p>{error ? `[${t("app.fault")}] ${error}` : t("app.connecting")}</p>
       </div>
     );
   }
 
   const common = { state, reload, onToggleSidebar: () => setSidebarOpen((v) => !v) };
-  const enabledPages = pages.filter((item) => capabilities?.pages.find((candidate) => candidate.id === item)?.enabled !== false);
-  if (!enabledPages.includes(page)) { queueMicrotask(() => navigate("installation")); }
+  const isCollaborator = state.currentUser?.role === "collaborator";
+  const adminOnlyPages: Page[] = ["settings", "secrets", "installation", "nodes", "routing", "browser", "integrations", "team"];
+  const enabledPages = pages.filter((item) => {
+    if (isCollaborator && adminOnlyPages.includes(item)) return false;
+    return capabilities?.pages.find((candidate) => candidate.id === item)?.enabled !== false;
+  });
+  if (!enabledPages.includes(page)) { queueMicrotask(() => navigate("chat")); }
   const activeProject = state.projects.find((p) => p.id === state.activeProjectId);
   const activeTaskCount = state.tasks.filter((t) => t.status === "running").length;
   const isRunning = activeTaskCount > 0;
@@ -295,8 +319,33 @@ function AppContent() {
           })}
         </nav>
         <footer>
-          <span>{t("app.local")}</span>
-          <span>{t("app.projectsCount", { count: state.projects.length })}</span>
+          <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+            <span>{t("app.local")}</span>
+            <span>{t("app.projectsCount", { count: state.projects.length })}</span>
+          </div>
+          <button
+            onClick={handleLogout}
+            style={{
+              width: "100%",
+              marginTop: "8px",
+              fontSize: "11px",
+              fontFamily: "var(--font-mono)",
+              padding: "5px 8px",
+              background: "rgba(255, 69, 58, 0.08)",
+              border: "1px solid var(--border-mid)",
+              color: "var(--text-muted)",
+              borderRadius: "4px",
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: "6px",
+            }}
+            title="锁定并退出登录"
+          >
+            <span>🔒</span>
+            <span>锁定 / 退出登录</span>
+          </button>
         </footer>
       </aside>
 
@@ -326,6 +375,28 @@ function AppContent() {
             </div>
 
             <div className="top-actions">
+              {state.currentUser && (
+                <span
+                  style={{
+                    fontSize: "11px",
+                    fontFamily: "var(--font-mono)",
+                    padding: "3px 8px",
+                    background: state.currentUser.role === "admin" ? "rgba(255, 122, 0, 0.12)" : "rgba(0, 240, 255, 0.12)",
+                    border: state.currentUser.role === "admin" ? "1px solid var(--amber)" : "1px solid var(--vfd-cyan)",
+                    color: state.currentUser.role === "admin" ? "var(--amber-bright)" : "var(--vfd-cyan)",
+                    borderRadius: "4px",
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: "4px",
+                  }}
+                  title={state.currentUser.role === "admin" ? "管理员账号" : "协同成员账号"}
+                >
+                  <span>{state.currentUser.role === "admin" ? "👑" : "🤝"}</span>
+                  <b>{state.currentUser.username}</b>
+                  <span style={{ fontSize: "10px", opacity: 0.8 }}>({state.currentUser.role === "admin" ? "管理员" : "协同成员"})</span>
+                </span>
+              )}
+
               {/* UI Scale / Zoom Controller */}
               <ZoomControl zoom={zoom} onZoomChange={setZoom} />
 
@@ -337,6 +408,25 @@ function AppContent() {
               </div>
               <button onClick={() => void reload()} title={t("app.refresh")}>
                 {t("app.sync")}
+              </button>
+              <button
+                onClick={handleLogout}
+                title="锁定并退出登录"
+                style={{
+                  fontSize: "11px",
+                  fontFamily: "var(--font-mono)",
+                  padding: "3px 8px",
+                  background: "#161822",
+                  border: "1px solid var(--border-mid)",
+                  color: "var(--amber)",
+                  borderRadius: "4px",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: "4px",
+                }}
+              >
+                🔒 锁定
               </button>
             </div>
           </header>
@@ -368,6 +458,7 @@ function AppContent() {
         {page === "integrations" && <IntegrationsPage {...common} />}
         {page === "installation" && <InstallationPage />}
         {page === "secrets" && <SecretsPage />}
+        {page === "team" && <TeamPage {...common} />}
         {page === "settings" && <SettingsPage {...common} />}
       </main>
 
