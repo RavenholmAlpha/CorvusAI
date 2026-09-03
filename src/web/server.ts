@@ -250,7 +250,7 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         return;
       }
       if (requestUrl.pathname === "/api/v1/runtime/capabilities" && req.method === "GET") {
-        send(res, 200, { serverVersion: "0.3.0", bundle: options.config.installation, features: options.config.installation?.features ?? [], pages: capabilityPages(options.config.installation?.features ?? []) }); return;
+        send(res, 200, { serverVersion: "0.3.1", bundle: options.config.installation, features: options.config.installation?.features ?? [], pages: capabilityPages(options.config.installation?.features ?? []) }); return;
       }
       if (requestUrl.pathname === "/api/v1/bundles/catalog" && req.method === "GET") { send(res, 200, options.bundles?.catalog() ?? { schemaVersion: 1, presets: Object.values(BUNDLES) }); return; }
       if (requestUrl.pathname === "/api/v1/bundles/current" && req.method === "GET") { send(res, 200, options.bundles ? await options.bundles.current() : options.config.installation); return; }

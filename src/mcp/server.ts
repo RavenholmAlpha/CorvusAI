@@ -39,7 +39,7 @@ export async function serveCorvusMcp(input: NodeJS.ReadableStream = process.stdi
     if (request.id === undefined) return;
     try {
       let result: unknown;
-      if (request.method === "initialize") result = { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "corvus", version: "0.3.0" } };
+      if (request.method === "initialize") result = { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "corvus", version: "0.3.1" } };
       else if (request.method === "tools/list") result = { tools: tools.map(({ call: _call, ...tool }) => tool) };
       else if (request.method === "tools/call") {
         const name = String(request.params?.name ?? "");
