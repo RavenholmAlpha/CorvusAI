@@ -155,7 +155,7 @@ function parseArgs(argv: string[]): CliArgs {
 export async function main(): Promise<void> {
   const cliArgs = parseArgs(process.argv);
   if (cliArgs.version) {
-    process.stdout.write("corvus 0.2.2\n");
+    process.stdout.write("corvus 0.3.0\n");
     return;
   }
   if (cliArgs.help) {
