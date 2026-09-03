@@ -17,9 +17,9 @@ const execFileAsync = promisify(execFile);
 const BUILT_IN_VERSION = "1.0.0";
 
 // Sub-agent factory: set by cli.ts so the task tool can spawn isolated agents.
-type SubAgentFactory = (prompt: string, description?: string, parentRunId?: string, profile?: string, role?: string) => Promise<string>;
-type ParallelTaskInput = { prompt: string; description?: string; profile?: string; role?: string };
-type SubAgentBatchFactory = (tasks: ParallelTaskInput[], parentRunId?: string) => Promise<Array<{ result?: string; error?: string; profile?: string }>>;
+type SubAgentFactory = (prompt: string, description?: string, parentRunId?: string, profile?: string, role?: string, projectId?: string) => Promise<string>;
+type ParallelTaskInput = { prompt: string; description?: string; profile?: string; role?: string; projectId?: string };
+type SubAgentBatchFactory = (tasks: ParallelTaskInput[], parentRunId?: string, defaultProjectId?: string) => Promise<Array<{ result?: string; error?: string; profile?: string }>>;
 let subAgentFactory: SubAgentFactory | undefined;
 let subAgentBatchFactory: SubAgentBatchFactory | undefined;
 let scopeLeaseCoordinator: ScopeLeaseCoordinator | undefined;
@@ -28,6 +28,7 @@ export type WorkspaceInfo = { id: string; name: string; path: string; lastSessio
 export type WorkspaceLister = () => Promise<WorkspaceInfo[]> | WorkspaceInfo[];
 export type WorkspaceRegistrar = (name: string, path: string) => Promise<WorkspaceInfo> | WorkspaceInfo;
 export type ProjectTaskDispatcher = (projectId: string, prompt: string, description?: string, roleId?: string, parentRunId?: string, background?: boolean) => Promise<string>;
+export type CodexTaskDispatcher = (options: { projectId: string; prompt: string; description?: string; model?: string; sandbox?: "read-only" | "workspace-write" | "danger-full-access"; parentRunId?: string; background?: boolean }) => Promise<string>;
 export type MemorySearcher = (query: string, projectId?: string) => Promise<Array<{ title: string; content: string; kind: string; projectId: string }>>;
 export type McpManager = (input: { action: "list" | "add" | "remove" | "test" | "import"; name?: string; config?: JsonObject; dryRun?: boolean }) => Promise<unknown>;
 export type SkillManager = (input: { action: "create" | "list" | "delete"; id?: string; content?: string; tier?: "global" | "workspace"; workspace?: string; overwrite?: boolean }) => Promise<unknown>;
@@ -40,6 +41,7 @@ export type RoleManager = (input: { action: "list" | "create" | "update" | "dele
 let workspaceLister: WorkspaceLister | undefined;
 let workspaceRegistrar: WorkspaceRegistrar | undefined;
 let projectTaskDispatcher: ProjectTaskDispatcher | undefined;
+let codexTaskDispatcher: CodexTaskDispatcher | undefined;
 let memorySearcher: MemorySearcher | undefined;
 let mcpManager: McpManager | undefined;
 let skillManager: SkillManager | undefined;
@@ -71,6 +73,10 @@ export function setWorkspaceRegistrar(registrar: WorkspaceRegistrar): void {
 
 export function setProjectTaskDispatcher(dispatcher: ProjectTaskDispatcher): void {
   projectTaskDispatcher = dispatcher;
+}
+
+export function setCodexTaskDispatcher(dispatcher: CodexTaskDispatcher): void {
+  codexTaskDispatcher = dispatcher;
 }
 
 export function setMemorySearcher(searcher: MemorySearcher): void { memorySearcher = searcher; }
@@ -517,13 +523,13 @@ export function createBuiltInToolManifests(): ToolManifest[] {
       resources: ["clock"],
       execute: () => ({ ok: true, output: { iso: new Date().toISOString() } }),
     }),
-    builtInTool<{ prompt: string; description?: string; profile?: string; role?: string }>({
+    builtInTool<{ prompt: string; description?: string; profile?: string; role?: string; projectId?: string }>({
       name: "task",
       namespace: "agent",
       description:
         "Delegate a self-contained sub-task to a fresh agent with an isolated context. " +
         "Use this for focused work (e.g. analyze one file, write a function) so the main " +
-        "conversation stays compact. The sub-agent has the same tools but its own history.",
+        "conversation stays compact. Set projectId to execute directly in a specific project workspace.",
       capability: "local",
       risk: "low",
       parameters: objectSchema(
@@ -532,6 +538,7 @@ export function createBuiltInToolManifests(): ToolManifest[] {
           description: stringSchema("A short label for this sub-task (optional).") as JsonSchema,
           profile: stringSchema("Optional legacy model profile ID.") as JsonSchema,
           role: stringSchema("Optional reusable agent role ID. Roles select a provider and may override its model.") as JsonSchema,
+          projectId: stringSchema("Optional target project workspace ID, name, or directory path.") as JsonSchema,
         },
         ["prompt"],
       ),
@@ -539,24 +546,24 @@ export function createBuiltInToolManifests(): ToolManifest[] {
       outputLimitBytes: 20000,
       evidencePolicy: "summary",
       resources: ["agent"],
-      execute: async ({ prompt, description, profile, role }, context) => {
+      execute: async ({ prompt, description, profile, role, projectId }, context) => {
         if (!subAgentFactory) {
           return { ok: false, error: "Sub-agent delegation is not available in this mode." };
         }
         try {
-          const result = await subAgentFactory(prompt, description, context.runId, profile, role);
+          const result = await subAgentFactory(prompt, description, context.runId, profile, role, projectId);
           return { ok: true, output: { result }, summary: "Sub-agent completed: " + prompt.slice(0, 80) };
         } catch (e: any) {
           return { ok: false, error: "Sub-agent failed: " + e.message };
         }
       },
     }),
-    builtInTool<{ tasks: Array<{ prompt: string; description?: string; profile?: string; role?: string }> } & JsonObject>({
+    builtInTool<{ tasks: Array<{ prompt: string; description?: string; profile?: string; role?: string; projectId?: string }>; projectId?: string } & JsonObject>({
       name: "parallel_tasks",
       namespace: "agent",
       description:
         "Delegate 2 to 8 independent sub-tasks concurrently. Use only when tasks do not depend on each other. " +
-        "Each task gets an isolated child session; results are returned in input order. Use task for dependent work.",
+        "Each task gets an isolated child session; results are returned in input order. Set projectId to target a project workspace.",
       capability: "local",
       risk: "low",
       parameters: objectSchema({
@@ -568,25 +575,27 @@ export function createBuiltInToolManifests(): ToolManifest[] {
             description: stringSchema("Short optional label."),
             profile: stringSchema("Optional legacy model profile ID."),
             role: stringSchema("Optional reusable agent role ID."),
+            projectId: stringSchema("Optional target project workspace ID, name, or path for this specific sub-task."),
           }, ["prompt"]),
         } as JsonSchema,
+        projectId: stringSchema("Optional default project workspace ID, name, or path for all tasks in this batch.") as JsonSchema,
       }, ["tasks"]),
       timeoutMs: 300000,
       outputLimitBytes: 40000,
       evidencePolicy: "summary",
       resources: ["agent"],
-      execute: async ({ tasks }, context) => {
+      execute: async ({ tasks, projectId }, context) => {
         if (!subAgentBatchFactory) {
           return { ok: false, error: "Parallel sub-agent delegation is not available in this mode." };
         }
         if (!Array.isArray(tasks) || tasks.length < 2 || tasks.length > 8) {
           return { ok: false, error: "parallel_tasks requires between 2 and 8 tasks." };
         }
-        const normalized = tasks.map((task) => ({ prompt: String(task.prompt ?? ""), description: task.description, profile: task.profile, role: task.role }));
+        const normalized = tasks.map((task) => ({ prompt: String(task.prompt ?? ""), description: task.description, profile: task.profile, role: task.role, projectId: task.projectId || projectId }));
         if (normalized.some((task) => !task.prompt.trim())) {
           return { ok: false, error: "Every parallel task requires a non-empty prompt." };
         }
-        const results = await subAgentBatchFactory(normalized, context.runId);
+        const results = await subAgentBatchFactory(normalized, context.runId, projectId);
         return {
           ok: true,
           output: { results },
@@ -656,30 +665,45 @@ export function createBuiltInToolManifests(): ToolManifest[] {
         }
       },
     }),
-    builtInTool<{ projectId: string; prompt: string; description?: string; role?: string; background?: boolean }>({
+    builtInTool<{ projectId: string; prompt: string; description?: string; role?: string; engine?: "corvus" | "codex"; background?: boolean }>({
       name: "dispatch_project_task",
       namespace: "orchestrator",
       description:
-        "Dispatch a specialized coding, refactoring, or analysis task to a specific project workspace. " +
-        "The project agent will execute in the target workspace directory with its own isolated context and tools, " +
-        "then return the results back to the master agent.",
+        "MANDATORY PROJECT DISPATCH: Assign a task to a project workspace. " +
+        "Whenever a user request mentions or targets a project or folder (e.g. 'cot', 'D:\\antipro\\3-30'), " +
+        "you MUST call this tool (or dispatch_codex_task / task with projectId) instead of executing file modifications or commands directly. " +
+        "The project agent will execute directly inside the target workspace directory with its own isolated context and tools, " +
+        "then return the results back to you.",
       capability: "local",
       risk: "low",
       parameters: objectSchema(
         {
-          projectId: stringSchema("The target workspace/project ID or name (use list_workspaces to discover IDs)."),
+          projectId: stringSchema("The target workspace/project ID, name, or directory path (e.g. 'cot', 'D:\\antipro\\3-30')."),
           prompt: stringSchema("The detailed instructions for the project subagent."),
           description: stringSchema("Short descriptive title for this task (optional).") as JsonSchema,
           role: stringSchema("Optional specialized agent role ID (e.g. 'coder', 'auditor').") as JsonSchema,
-          background: { type: "boolean", description: "Return a task ID immediately and run asynchronously; query it with check_subagent_task." } as JsonSchema,
+          engine: stringSchema("Optional agent execution engine: 'corvus' (default native project agent) or 'codex' (external Codex CLI agent).") as JsonSchema,
+          background: { type: "boolean", description: "Return a task ID immediately and run asynchronously; query it with check_subagent_task. Highly recommended for long or complex tasks." } as JsonSchema,
+          timeoutMs: { type: "number", description: "Optional execution timeout in milliseconds (default: 600000 = 10 minutes)." } as JsonSchema,
         },
         ["projectId", "prompt"],
       ),
-      timeoutMs: 300000,
+      timeoutMs: 600000,
       outputLimitBytes: 30000,
       evidencePolicy: "summary",
       resources: ["orchestrator"],
-      execute: async ({ projectId, prompt, description, role, background }, context) => {
+      execute: async ({ projectId, prompt, description, role, engine, background }, context) => {
+        if (engine === "codex") {
+          if (!codexTaskDispatcher) {
+            return { ok: false, error: "Codex task dispatcher is not available in this runtime." };
+          }
+          try {
+            const result = await codexTaskDispatcher({ projectId, prompt, description, parentRunId: context.runId, background });
+            return { ok: true, output: { result }, summary: background ? `Codex task dispatched to [${projectId}] in background: ${result}` : `Codex task on project [${projectId}] completed` };
+          } catch (e: any) {
+            return { ok: false, error: `Codex task on project [${projectId}] failed: ${e.message ?? String(e)}` };
+          }
+        }
         if (!projectTaskDispatcher) {
           return { ok: false, error: "Project task dispatcher is not available in this runtime." };
         }
@@ -692,6 +716,54 @@ export function createBuiltInToolManifests(): ToolManifest[] {
           };
         } catch (e: any) {
           return { ok: false, error: `Task on project [${projectId}] failed: ${e.message ?? String(e)}` };
+        }
+      },
+    }),
+    builtInTool<{ projectId: string; prompt: string; description?: string; model?: string; sandbox?: "read-only" | "workspace-write" | "danger-full-access"; background?: boolean; timeoutMs?: number }>({
+      name: "dispatch_codex_task",
+      namespace: "orchestrator",
+      description:
+        "Dispatch a specialized coding, refactoring, or analysis task to an external Codex CLI agent in a target project workspace. " +
+        "Executes headlessly via 'codex exec --json' in the target project directory, streaming live thoughts, commands, and file edits into a dedicated subagent session.",
+      capability: "local",
+      risk: "low",
+      parameters: objectSchema(
+        {
+          projectId: stringSchema("The target workspace/project ID, name, or directory path (e.g. 'cot', 'D:\\antipro\\3-30')."),
+          prompt: stringSchema("The detailed instructions for the Codex agent."),
+          description: stringSchema("Short descriptive title for this task (optional).") as JsonSchema,
+          model: stringSchema("Optional model override for Codex (e.g. 'o3-mini', 'gpt-4o').") as JsonSchema,
+          sandbox: stringSchema("Optional sandbox policy ('read-only', 'workspace-write', 'danger-full-access'). Defaults to 'workspace-write'.") as JsonSchema,
+          background: { type: "boolean", description: "Return a task ID immediately and run asynchronously; query it with check_subagent_task. Recommended for complex tasks." } as JsonSchema,
+          timeoutMs: { type: "number", description: "Optional execution timeout in milliseconds (default: 600000 = 10 minutes)." } as JsonSchema,
+        },
+        ["projectId", "prompt"],
+      ),
+      timeoutMs: 600000,
+      outputLimitBytes: 30000,
+      evidencePolicy: "summary",
+      resources: ["orchestrator"],
+      execute: async ({ projectId, prompt, description, model, sandbox, background }, context) => {
+        if (!codexTaskDispatcher) {
+          return { ok: false, error: "Codex task dispatcher is not configured in this runtime. Verify Codex CLI is installed." };
+        }
+        try {
+          const result = await codexTaskDispatcher({
+            projectId,
+            prompt,
+            description,
+            model,
+            sandbox,
+            parentRunId: context.runId,
+            background,
+          });
+          return {
+            ok: true,
+            output: { result },
+            summary: background ? `Codex task dispatched to [${projectId}] in background: ${result}` : `Codex task on [${projectId}] completed`,
+          };
+        } catch (e: any) {
+          return { ok: false, error: `Codex task on [${projectId}] failed: ${e.message ?? String(e)}` };
         }
       },
     }),

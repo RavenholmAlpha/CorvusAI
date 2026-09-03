@@ -576,4 +576,23 @@ describe("durable harness stores", () => {
       "evidence.created",
     ]);
   });
+
+  it("appends message with undefined properties in metadata without throwing", async () => {
+    const { runs } = await createStores();
+    const run = runs.createRun({ goal: "metadata test", model: "test-model", endpoint: "https://example.test/v1" });
+
+    const message = runs.appendMessage({
+      runId: run.id,
+      role: "assistant",
+      content: "Hello",
+      metadata: {
+        engine: "codex",
+        usage: undefined as any,
+        threadId: "thr_123",
+      },
+    });
+
+    expect(message.id).toBeDefined();
+    expect(message.metadata).toEqual({ engine: "codex", threadId: "thr_123" });
+  });
 });

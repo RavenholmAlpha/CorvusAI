@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { eventUrl, getJson, postJson } from "../api";
 import type { Project, Session, SessionContextInfo, Task } from "../types";
 import type { PageProps } from "./shared";
@@ -146,6 +146,22 @@ function ToolResultItem({
   );
 }
 
+export interface SessionState {
+  status: "idle" | "submitting" | "running" | "canceling" | "failed";
+  stream: string;
+  operationId: string;
+  runId: string;
+  activity: Array<{ type: string; createdAt?: string; runId?: string }>;
+}
+
+const defaultSessionState: SessionState = {
+  status: "idle",
+  stream: "",
+  operationId: "",
+  runId: "",
+  activity: [],
+};
+
 export function pendingApprovalsForSession<T extends { sessionId?: string | null }>(approvals: T[], sessionId: string): T[] {
   return sessionId ? approvals.filter((approval) => approval.sessionId === sessionId) : [];
 }
@@ -159,11 +175,30 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const [selected, setSelected] = useState("");
   const [messages, setMessages] = useState<any[]>([]);
   const [draft, setDraft] = useState("");
-  const [stream, setStream] = useState("");
-  const [status, setStatus] = useState<"idle" | "submitting" | "running" | "canceling" | "failed">("idle");
-  const [operationId, setOperationId] = useState("");
-  const [activity, setActivity] = useState<Array<{ type: string; createdAt?: string; runId?: string }>>([]);
-  const [runId, setRunId] = useState("");
+  const [sessionStateMap, setSessionStateMap] = useState<Record<string, SessionState>>({});
+
+  const getSessionState = useCallback((sId: string): SessionState => {
+    return sId ? (sessionStateMap[sId] ?? defaultSessionState) : defaultSessionState;
+  }, [sessionStateMap]);
+
+  const updateSessionState = useCallback((sId: string, updater: Partial<SessionState> | ((prev: SessionState) => Partial<SessionState>)) => {
+    if (!sId) return;
+    setSessionStateMap((prevMap) => {
+      const existing = prevMap[sId] ?? defaultSessionState;
+      const patch = typeof updater === "function" ? updater(existing) : updater;
+      return {
+        ...prevMap,
+        [sId]: { ...existing, ...patch },
+      };
+    });
+  }, []);
+
+  const currentSessionState = selected ? (sessionStateMap[selected] ?? defaultSessionState) : defaultSessionState;
+  const status = currentSessionState.status;
+  const stream = currentSessionState.stream;
+  const operationId = currentSessionState.operationId;
+  const runId = currentSessionState.runId;
+  const activity = currentSessionState.activity;
   const [action, setAction] = useState<Action>(null);
   const [renameName, setRenameName] = useState("");
   const [follow, setFollow] = useState(true);
@@ -209,9 +244,15 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   const handleZoomChange = (nextZoom: number) => {
     setZoom(nextZoom);
     const scale = nextZoom / 100;
-    (document.documentElement.style as any).zoom = String(scale);
-    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    if (nextZoom === 100) {
+      (document.documentElement.style as any).zoom = "";
+      document.documentElement.style.removeProperty("--ui-zoom");
+    } else {
+      (document.documentElement.style as any).zoom = String(scale);
+      document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    }
     localStorage.setItem("corvus_ui_zoom", String(nextZoom));
+    window.dispatchEvent(new Event("storage"));
   };
 
   const startChatResize = (e: React.MouseEvent) => {
@@ -248,17 +289,18 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
 
   const messagesRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const activeEventSourceRef = useRef<EventSource | null>(null);
+  const activeEventSourcesRef = useRef<Map<string, { source: EventSource; operationId: string }>>(new Map());
 
   const handleApproval = async (approvalId: string, decision: "allow" | "deny", scope: "once" | "always" | "never" = "once") => {
+    if (!selected) return;
     try {
-      setStatus("running");
+      updateSessionState(selected, { status: "running" });
       await postJson(`/api/approvals/${approvalId}`, { decision, scope });
       toast[decision === "allow" ? "success" : "info"](decision === "allow" ? "Tool execution approved; conversation resumed." : "Tool execution denied; conversation continued.");
       await Promise.all([reload(), loadMessages(), loadSessionContext()]);
-      setStatus("idle");
+      updateSessionState(selected, { status: "idle" });
     } catch (e) {
-      setStatus("failed");
+      updateSessionState(selected, { status: "failed" });
       toast.error("Failed to resolve approval: " + String(e));
     }
   };
@@ -333,9 +375,9 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
       try {
         const list = await getJson<any[]>("/api/sessions/" + sId + "/messages");
         setMessages((prev) => {
-          // Preserve any in-flight temporary optimistic user messages that aren't yet recorded by backend
+          // Preserve in-flight temporary optimistic user messages strictly belonging to THIS session
           const temps = prev.filter(
-            (m) => m.id && String(m.id).startsWith("temp-") && !list.some((saved) => saved.role === "user" && saved.content === m.content)
+            (m) => m.sessionId === sId && m.id && String(m.id).startsWith("temp-") && !list.some((saved) => saved.role === "user" && saved.content === m.content)
           );
           return [...list, ...temps];
         });
@@ -380,24 +422,170 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     }
   };
 
+  const attachOperation = useCallback((targetSessionId: string, opId: string) => {
+    if (!opId || !targetSessionId) return;
+
+    if (activeEventSourcesRef.current.get(targetSessionId)?.operationId === opId) {
+      return;
+    }
+
+    const existing = activeEventSourcesRef.current.get(targetSessionId);
+    if (existing) {
+      existing.source.close();
+      activeEventSourcesRef.current.delete(targetSessionId);
+    }
+
+    updateSessionState(targetSessionId, {
+      status: "running",
+      operationId: opId,
+      stream: "",
+    });
+
+    const source = new EventSource(eventUrl("/api/operations/" + opId + "/events"));
+    activeEventSourcesRef.current.set(targetSessionId, { source, operationId: opId });
+
+    source.addEventListener("activity", (event) => {
+      try {
+        const item = JSON.parse((event as MessageEvent).data);
+        updateSessionState(targetSessionId, (prev) => ({
+          runId: item.runId || prev.runId,
+          activity: [...prev.activity, { type: item.type, createdAt: item.createdAt, runId: item.runId }].slice(-20),
+        }));
+        if (activeSessionRef.current === targetSessionId) {
+          void loadMessages(targetSessionId);
+          void reload();
+        }
+      } catch {}
+    });
+
+    source.addEventListener("delta", (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data);
+        updateSessionState(targetSessionId, (prev) => ({
+          stream: prev.stream + (data.text || ""),
+        }));
+      } catch {}
+    });
+
+    source.addEventListener("complete", async (event) => {
+      source.close();
+      activeEventSourcesRef.current.delete(targetSessionId);
+
+      let routedSessionId: string | undefined;
+      try {
+        const parsed = JSON.parse((event as MessageEvent).data);
+        const rId: string = typeof parsed?.routedSessionId === "string" ? parsed.routedSessionId : "";
+        if (rId) {
+          routedSessionId = rId;
+          activeSessionRef.current = rId;
+          setSelected(rId);
+        }
+      } catch {}
+
+      updateSessionState(targetSessionId, {
+        status: "idle",
+        operationId: "",
+        stream: "",
+      });
+
+      const finalSessionId = routedSessionId || targetSessionId;
+      await loadMessages(finalSessionId);
+      await loadSessionContext(finalSessionId);
+      await loadSessions(finalSessionId);
+      void reload();
+    });
+
+    source.addEventListener("canceled", () => {
+      source.close();
+      activeEventSourcesRef.current.delete(targetSessionId);
+
+      updateSessionState(targetSessionId, {
+        status: "idle",
+        operationId: "",
+        stream: "Run canceled.",
+      });
+
+      void loadMessages(targetSessionId);
+      void reload();
+    });
+
+    source.addEventListener("failed", (event) => {
+      source.close();
+      activeEventSourcesRef.current.delete(targetSessionId);
+
+      let errorMsg = "Operation failed";
+      try {
+        errorMsg = JSON.parse((event as MessageEvent).data).error || errorMsg;
+      } catch {}
+
+      updateSessionState(targetSessionId, {
+        status: "failed",
+        operationId: "",
+        stream: "Error: " + errorMsg,
+      });
+
+      toast.error("Operation failed: " + errorMsg);
+      void loadMessages(targetSessionId);
+      void reload();
+    });
+  }, [updateSessionState, reload]);
+
   useEffect(() => {
     loadSessions();
   }, [state.activeProjectId]);
 
   useEffect(() => {
-    if (activeSessionRef.current !== selected) {
-      activeSessionRef.current = selected;
-      if (activeEventSourceRef.current) {
-        activeEventSourceRef.current.close();
-        activeEventSourceRef.current = null;
-      }
-      setStatus("idle");
-      setStream("");
-      setRunId("");
+    if (!selected) {
+      setMessages([]);
+      return;
     }
-    loadMessages(selected);
-    loadSessionContext(selected);
-  }, [selected]);
+    activeSessionRef.current = selected;
+
+    // Immediately clear message state when switching sessions so old messages never leak or flicker
+    setMessages([]);
+    void loadMessages(selected);
+    void loadSessionContext(selected);
+
+    // Auto-reconnect to active operation if this session has a turn currently running
+    void (async () => {
+      try {
+        const opCheck = await getJson<{ active: boolean; operationId?: string | null; runId?: string | null }>(
+          `/api/sessions/${selected}/active-operation`
+        );
+        if (opCheck.active && opCheck.operationId) {
+          if (opCheck.runId) updateSessionState(selected, { runId: opCheck.runId });
+          attachOperation(selected, opCheck.operationId);
+        } else if (opCheck.active) {
+          updateSessionState(selected, {
+            status: "running",
+            runId: opCheck.runId || undefined,
+          });
+        }
+      } catch {}
+    })();
+  }, [selected, attachOperation, updateSessionState]);
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible" && selected) {
+        void loadMessages(selected);
+        void loadSessionContext(selected);
+        void (async () => {
+          try {
+            const opCheck = await getJson<{ active: boolean; operationId?: string | null; runId?: string | null }>(
+              `/api/sessions/${selected}/active-operation`
+            );
+            if (opCheck.active && opCheck.operationId && status !== "running") {
+              if (opCheck.runId) updateSessionState(selected, { runId: opCheck.runId });
+              attachOperation(selected, opCheck.operationId);
+            }
+          } catch {}
+        })();
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [selected, status, attachOperation, updateSessionState]);
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -445,7 +633,8 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!draft.trim() || status === "running" || status === "submitting") return;
+    const current = getSessionState(selected);
+    if (!draft.trim() || current.status === "running" || current.status === "submitting") return;
 
     let targetSessionId = selected || activeSessionRef.current;
     if (!targetSessionId) {
@@ -465,14 +654,17 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
     setPromptHistory((prev) => [...prev.filter((p) => p !== userText.trim()), userText.trim()]);
     setHistoryIndex(-1);
     setDraft("");
-    setStatus("submitting");
-    setStream("");
-    setActivity([]);
+    updateSessionState(targetSessionId, {
+      status: "submitting",
+      stream: "",
+      activity: [],
+    });
 
     setMessages((prev) => [
       ...prev,
       {
         id: "temp-" + Date.now(),
+        sessionId: targetSessionId,
         role: "user",
         content: userText,
         createdAt: new Date().toISOString(),
@@ -481,97 +673,27 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
 
     try {
       const operation = await postJson<{ operationId: string }>("/api/sessions/" + targetSessionId + "/messages", { prompt: userText });
-      setOperationId(operation.operationId);
-      setStatus("running");
-
-      if (activeEventSourceRef.current) {
-        activeEventSourceRef.current.close();
-      }
-
-      const source = new EventSource(eventUrl("/api/operations/" + operation.operationId + "/events"));
-      activeEventSourceRef.current = source;
-
-      source.addEventListener("activity", (event) => {
-        try {
-          const item = JSON.parse((event as MessageEvent).data);
-          if (item.runId) setRunId(item.runId);
-          setActivity((items) => [...items, { type: item.type, createdAt: item.createdAt, runId: item.runId }].slice(-20));
-          // Live reload of messages and approvals so tool executions and pending permissions appear immediately
-          void loadMessages(targetSessionId);
-          void reload();
-        } catch {}
-      });
-
-      source.addEventListener("delta", (event) => {
-        try {
-          const data = JSON.parse((event as MessageEvent).data);
-          setStream((prev) => prev + (data.text || ""));
-        } catch {}
-      });
-
-      source.addEventListener("complete", async (event) => {
-        source.close();
-        activeEventSourceRef.current = null;
-        let routedSessionId: string | undefined;
-        try {
-          const parsed = JSON.parse((event as MessageEvent).data);
-          const rId: string = typeof parsed?.routedSessionId === "string" ? parsed.routedSessionId : "";
-          if (rId) {
-            routedSessionId = rId;
-            activeSessionRef.current = rId;
-            setSelected(rId);
-          }
-        } catch {}
-        setStatus("idle");
-        setOperationId("");
-        setStream("");
-        const finalSessionId = routedSessionId || targetSessionId;
-        await loadMessages(finalSessionId);
-        await loadSessionContext(finalSessionId);
-        await loadSessions(finalSessionId);
-        void reload();
-      });
-
-      source.addEventListener("canceled", () => {
-        source.close();
-        activeEventSourceRef.current = null;
-        setStatus("idle");
-        setOperationId("");
-        setStream("Run canceled.");
-        void reload();
-      });
-
-      source.addEventListener("failed", (event) => {
-        source.close();
-        activeEventSourceRef.current = null;
-        setStatus("failed");
-        setOperationId("");
-        let errorMsg = "Operation failed";
-        try {
-          errorMsg = JSON.parse((event as MessageEvent).data).error || errorMsg;
-        } catch {}
-        setStream("Error: " + errorMsg);
-        toast.error("Operation failed: " + errorMsg);
-        void loadMessages(targetSessionId);
-      });
+      attachOperation(targetSessionId, operation.operationId);
     } catch (err: any) {
       toast.error("Failed to send message: " + String(err.message || err));
-      setStatus("failed");
+      updateSessionState(targetSessionId, { status: "failed" });
     }
   };
 
   const handleCancel = async () => {
-    if (!operationId && !runId) return;
-    setStatus("canceling");
+    const sId = selected || activeSessionRef.current;
+    if (!sId) return;
+    const current = getSessionState(sId);
+    updateSessionState(sId, { status: "canceling" });
     try {
-      if (operationId) {
-        await postJson("/api/operations/" + operationId + "/cancel", {});
-      } else if (runId) {
-        await postJson(`/api/runs/${runId}/cancel`, {});
+      await postJson(`/api/sessions/${sId}/cancel`, {});
+      if (current.operationId) {
+        await postJson(`/api/operations/${current.operationId}/cancel`, {}).catch(() => {});
       }
-      toast.info("Sent cancel signal to agent.");
+      toast.info("Sent cancel signal to session agent.");
     } catch (err) {
       toast.error("Failed to cancel: " + String(err));
+      updateSessionState(sId, { status: "idle" });
     }
   };
 
@@ -667,6 +789,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
               onClick={async () => {
                 try {
                   const session = await postJson<Session>("/api/master/sessions", { name: "Master Orchestration Conversation" });
+                  setMessages([]);
                   await loadSessions();
                   setSelected(session.id);
                   setMobileSessionOpen(false);
@@ -685,6 +808,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
             ) : (
               masterSessions.map((session) => {
                 const tasks = tasksByParent.get(session.id) || [];
+                const isRunning = Boolean(state.activeOperations?.[session.id] || sessionStateMap[session.id]?.status === "running" || (selected === session.id && status === "running"));
                 return (
                   <div key={session.id} style={{ marginBottom: "6px" }}>
                     <div className={"session-entry master " + (selected === session.id ? "active" : "")}>
@@ -695,8 +819,12 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                             setMobileSessionOpen(false);
                           }}
                           title={session.name || "Master Conversation"}
+                          style={{ display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" }}
                         >
-                          👑 {session.name || "Master Conversation"}
+                          <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                            👑 {session.name || "Master Conversation"}
+                          </span>
+                          {isRunning && <span className="running-pill">⚡ RUNNING</span>}
                         </button>
                       </div>
                       <div className="session-entry-actions">
@@ -776,6 +904,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                           onClick={async () => {
                             try {
                               const newSession = await postJson<Session>("/api/projects/" + proj.id + "/sessions", { name: "Project conversation" });
+                              setMessages([]);
                               await loadSessions();
                               await reload();
                               setSelected(newSession.id);
@@ -800,6 +929,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                           projSessions.map((session) => {
                             const tasks = tasksByParent.get(session.id) || [];
                             const isCurrentSelected = selected === session.id;
+                            const isRunning = Boolean(state.activeOperations?.[session.id] || sessionStateMap[session.id]?.status === "running" || (selected === session.id && status === "running"));
 
                             return (
                               <div key={session.id} style={{ marginBottom: "4px" }}>
@@ -811,8 +941,12 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
                                         setMobileSessionOpen(false);
                                       }}
                                       title={session.name || "Conversation"}
+                                      style={{ display: "flex", alignItems: "center", gap: "6px", overflow: "hidden" }}
                                     >
-                                      💬 {session.name || "Conversation"}
+                                      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                        💬 {session.name || "Conversation"}
+                                      </span>
+                                      {isRunning && <span className="running-pill">⚡ RUNNING</span>}
                                     </button>
                                   </div>
                                   <div className="session-entry-actions">
@@ -872,7 +1006,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
       <div className="transcript">
         {/* Workspace Top Header (Single Clean Unified Header) */}
         <div className="workspace-header">
-          <div style={{ display: "flex", flexDirection: "column", minWidth: 0, gap: "4px" }}>
+          <div className="workspace-header-info" style={{ display: "flex", flexDirection: "column", minWidth: 0, flex: "1 1 auto", overflow: "hidden", gap: "2px" }}>
             {/* Interactive Lineage Breadcrumbs */}
             <div className="lineage-breadcrumbs">
               {isMasterSession ? (
@@ -918,7 +1052,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
               )}
             </div>
 
-            <p style={{ margin: 0, color: "var(--text-muted)", font: "11px var(--font-mono)" }}>
+            <p style={{ margin: 0, color: "var(--text-muted)", font: "11px var(--font-mono)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {isMasterSession
                 ? `Global Control Plane · Managing ${state.projects.length} Workspace(s) · Model: ${connection.model}`
                 : dispatchedTask
@@ -927,7 +1061,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
             </p>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div className="workspace-header-actions" style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap", flexShrink: 0 }}>
             {selectedSession && Object.keys(state.providers).length > 0 && (
               <label className="conversation-model-selector" title="Provider and model for this conversation only">
                 <span>{t("chat.model")}</span>

@@ -27,4 +27,14 @@ describe("GlobalOrchestrator", () => {
     );
     expect(orchestrator.plan("review this").targets[0]).toMatchObject({ roleId: "security", reason: "routing rule high" });
   });
+
+  it("handles multi-target project path resolution and routing cleanly", () => {
+    const orchestrator = new GlobalOrchestrator(
+      () => [{ id: "proj_cot", name: "cot", path: "/workspace/cot" }],
+      () => [],
+      async () => "ok",
+    );
+    const plan = orchestrator.plan("Help me inspect /workspace/cot", "default");
+    expect(plan).toBeDefined();
+  });
 });

@@ -61,6 +61,7 @@ export interface WebControlPlaneOptions {
   getContextUsage?: (sessionId?: string, projectId?: string) => unknown;
   pluginManagement?: PluginManagementService;
   reloadAutomations?: () => void;
+  runAutomation?: (id: string) => Promise<void>;
   bundles?: BundleService;
   indexMemory?: (memory: import("../harness/types.js").ProjectMemoryRow) => Promise<void>;
   dispatchSessionMessage?: (sessionId: string, prompt: string, roleId?: string) => Promise<unknown>;
@@ -239,7 +240,11 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         const usage = usageEvents.reduce((total, event) => ({ promptTokens: total.promptTokens + Number(event.payload.promptTokens ?? 0), completionTokens: total.completionTokens + Number(event.payload.completionTokens ?? 0), requests: total.requests + 1 }), { promptTokens: 0, completionTokens: 0, requests: 0 });
         const masterSessions = options.runs.listMasterSessions();
         const masterSessionId = options.runs.getLatestMasterSession()?.id ?? null;
-        send(res, 200, { activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model }, plugins: options.plugins ?? [], mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })), usage, webLocale: options.config.webLocale ?? "en", maxToolRounds: options.config.maxToolRounds, contextOverflowMode: options.config.contextOverflowMode, permissionPreset: options.config.installation?.permissionPreset ?? "balanced", maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0, loopProtection: Boolean(options.config.loopProtection), browser: options.config.browser ?? {}, executionNodes: options.config.executionNodes ?? {}, deliveries: options.channelDeliveries?.list(50) ?? [], skills, timeline: options.events?.listRecent(50) ?? [], artifacts: options.evidence?.listRecent(50) ?? [], diagnostics: validateConfig(options.config), automations: options.config.automations ?? {}, automationStates: options.automationStates?.() ?? [], routingRules: options.config.routingRules ?? {}, channels: redactSecrets(options.config.channels ?? {}), activeProjectId, projects, providers: redactSecrets(options.config.providers ?? {}), roles: options.config.agentRoles ?? {}, mainProviderId: options.config.mainProviderId, tasks: options.runs.listSubagentTasks(), allSessions: options.runs.listSessions(), masterSessions, masterSessionId, approvals: options.approvals.listPending().map((approval) => ({ ...approval, sessionId: options.runs.getRun(approval.runId)?.sessionId ?? null, toolCall: options.getToolCall?.(approval.toolCallId) })), sessions: active ? options.runs.listSessions(active.id) : [], memories: options.runs.listProjectMemories(undefined, 500), memoryLinks: options.runs.listProjectMemoryLinks(undefined) });
+        const activeOperations: Record<string, string> = {};
+        for (const [opId, sId] of operationSessionIds) {
+          if (operationControllers.has(opId)) activeOperations[sId] = opId;
+        }
+        send(res, 200, { activeOperations, activeConnection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId] ? { providerId: options.config.mainProviderId, label: options.config.providers[options.config.mainProviderId].label ?? options.config.mainProviderId, protocol: options.config.providers[options.config.mainProviderId].protocol, endpoint: options.config.providers[options.config.mainProviderId].endpoint, model: options.config.providers[options.config.mainProviderId].defaultModel ?? options.config.providers[options.config.mainProviderId].models[0] } : { providerId: null, label: "Legacy global", protocol: "openai-chat", endpoint: options.config.endpoint, model: options.config.model }, plugins: options.plugins ?? [], mcp: Object.entries(options.config.mcpServers ?? {}).map(([name, server]) => ({ name, ...redactSecrets(server), ...(options.listMcp?.().find((item: any) => item.name === name) as object ?? {}) })), usage, webLocale: options.config.webLocale ?? "en", maxToolRounds: options.config.maxToolRounds, contextOverflowMode: options.config.contextOverflowMode, permissionPreset: options.config.installation?.permissionPreset ?? "balanced", maxConsecutiveIdenticalToolCalls: options.config.maxConsecutiveIdenticalToolCalls ?? 0, loopProtection: Boolean(options.config.loopProtection), browser: options.config.browser ?? {}, executionNodes: options.config.executionNodes ?? {}, deliveries: options.channelDeliveries?.list(50) ?? [], skills, timeline: options.events?.listRecent(50) ?? [], artifacts: options.evidence?.listRecent(50) ?? [], diagnostics: validateConfig(options.config), automations: options.config.automations ?? {}, automationStates: options.automationStates?.() ?? [], routingRules: options.config.routingRules ?? {}, channels: redactSecrets(options.config.channels ?? {}), activeProjectId, projects, providers: redactSecrets(options.config.providers ?? {}), roles: options.config.agentRoles ?? {}, mainProviderId: options.config.mainProviderId, tasks: options.runs.listSubagentTasks(), allSessions: options.runs.listSessions(), masterSessions, masterSessionId, approvals: options.approvals.listPending().map((approval) => ({ ...approval, sessionId: options.runs.getRun(approval.runId)?.sessionId ?? null, toolCall: options.getToolCall?.(approval.toolCallId) })), sessions: active ? options.runs.listSessions(active.id) : [], memories: options.runs.listProjectMemories(undefined, 500), memoryLinks: options.runs.listProjectMemoryLinks(undefined) });
         return;
       }
       if (requestUrl.pathname === "/api/projects" && req.method === "POST") {
@@ -297,12 +302,32 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       }
       const sessionExport = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/export$/);
       if (sessionExport && req.method === "GET") { const messages = options.runs.listSessionMessages(sessionExport[1]); const format = requestUrl.searchParams.get("format") ?? "markdown"; if (format === "json") { res.writeHead(200, { "content-type": "application/json", "content-disposition": "attachment; filename=session.json" }); res.end(JSON.stringify(messages, null, 2)); } else { const markdown = messages.map((message) => "## " + message.role + "\n\n" + (message.content ?? "")).join("\n\n---\n\n"); res.writeHead(200, { "content-type": "text/markdown; charset=utf-8", "content-disposition": "attachment; filename=session.md" }); res.end(markdown); } return; }
-      const sessionAction = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/(rename|archive|delete)$/);
+      const sessionAction = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/(rename|archive|delete|cancel)$/);
       if (sessionAction && req.method === "POST") {
+        const sessionId = sessionAction[1];
+        if (sessionAction[2] === "cancel") {
+          let canceledOps = 0;
+          for (const [opId, sId] of operationSessionIds) {
+            if (sId === sessionId && operationControllers.has(opId)) {
+              operationControllers.get(opId)?.abort();
+              operationControllers.delete(opId);
+              const runId = operationRunIds.get(opId);
+              if (runId && options.cancelRun) await options.cancelRun(runId);
+              emitOperation(opId, "canceled", { runId });
+              canceledOps++;
+            }
+          }
+          const activeRuns = options.runs.listRuns().filter((r) => r.sessionId === sessionId && (r.status === "running" || r.status === "waiting_for_approval"));
+          for (const r of activeRuns) {
+            if (options.cancelRun) await options.cancelRun(r.id);
+          }
+          send(res, 200, { ok: true, canceledCount: canceledOps + activeRuns.length });
+          return;
+        }
         const body = await readJson(req);
-        if (sessionAction[2] === "rename") send(res, 200, options.runs.renameSession(sessionAction[1], String(body.name ?? "Untitled")));
-        else if (sessionAction[2] === "archive") send(res, 200, options.runs.archiveSession(sessionAction[1]));
-        else { options.runs.deleteSession(sessionAction[1]); send(res, 200, { ok: true }); }
+        if (sessionAction[2] === "rename") send(res, 200, options.runs.renameSession(sessionId, String(body.name ?? "Untitled")));
+        else if (sessionAction[2] === "archive") send(res, 200, options.runs.archiveSession(sessionId));
+        else { options.runs.deleteSession(sessionId); send(res, 200, { ok: true }); }
         return;
       }
       const messagesMatch = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
@@ -349,6 +374,13 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
           };
         }
         const isMaster = targetSession ? targetSession.projectId === null : false;
+        let activeOperationId: string | null = null;
+        for (const [opId, sId] of operationSessionIds) {
+          if (sId === sessionId && operationControllers.has(opId)) {
+            activeOperationId = opId;
+            break;
+          }
+        }
         send(res, 200, {
           sessionId,
           isMaster,
@@ -357,6 +389,7 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
           task: task ?? null,
           childTasks,
           contextUsage,
+          activeOperationId,
           connection: options.config.mainProviderId && options.config.providers?.[options.config.mainProviderId]
             ? {
                 providerId: options.config.mainProviderId,
@@ -372,6 +405,26 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
                 endpoint: options.config.endpoint,
                 model: options.config.model,
               },
+        });
+        return;
+      }
+
+      const activeOpMatch = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/active-operation$/);
+      if (activeOpMatch && req.method === "GET") {
+        const sessionId = activeOpMatch[1];
+        let activeOpId: string | null = null;
+        for (const [opId, sId] of operationSessionIds) {
+          if (sId === sessionId && operationControllers.has(opId)) {
+            activeOpId = opId;
+            break;
+          }
+        }
+        const activeRun = options.runs.listRuns().find((r) => r.sessionId === sessionId && (r.status === "running" || r.status === "waiting_for_approval"));
+        send(res, 200, {
+          active: Boolean(activeOpId || activeRun),
+          operationId: activeOpId,
+          runId: activeRun?.id ?? null,
+          status: activeRun?.status ?? (activeOpId ? "running" : "idle"),
         });
         return;
       }
@@ -432,7 +485,16 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       const runAction = requestUrl.pathname.match(/^\/api\/runs\/([^/]+)\/(cancel|resume)$/);
       if (runAction && req.method === "POST") { if (runAction[2] === "cancel") { if (!options.cancelRun) throw new Error("Run cancellation unavailable"); await options.cancelRun(runAction[1]); } else { if (!options.resumeRun) throw new Error("Run resume unavailable"); await options.resumeRun(runAction[1]); } send(res, 200, { ok: true }); return; }
       const operationCancel = requestUrl.pathname.match(/^\/api\/operations\/([^/]+)\/cancel$/);
-      if (operationCancel && req.method === "POST") { const operationId = operationCancel[1]; operationControllers.get(operationId)?.abort(); const runId = operationRunIds.get(operationId); if (runId && options.cancelRun) await options.cancelRun(runId); emitOperation(operationId, "canceled", { runId }); send(res, 200, { ok: true }); return; }
+      if (operationCancel && req.method === "POST") {
+        const operationId = operationCancel[1];
+        operationControllers.get(operationId)?.abort();
+        operationControllers.delete(operationId);
+        const runId = operationRunIds.get(operationId);
+        if (runId && options.cancelRun) await options.cancelRun(runId);
+        emitOperation(operationId, "canceled", { runId });
+        send(res, 200, { ok: true });
+        return;
+      }
       const operationEvents = requestUrl.pathname.match(/^\/api\/operations\/([^/]+)\/events$/);
       if (operationEvents && req.method === "GET") {
         const id = operationEvents[1];
@@ -449,7 +511,18 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
         operationSessionIds.set(operationId, asyncSessionSend[1]);
         const controller = new AbortController(); operationControllers.set(operationId, controller);
         send(res, 202, { operationId });
-        void options.sendSessionMessage(asyncSessionSend[1], String(body.prompt ?? ""), (text) => emitOperation(operationId, "delta", { text }), controller.signal).then((result) => emitOperation(operationId, "complete", result)).catch((error) => emitOperation(operationId, controller.signal.aborted ? "canceled" : "failed", { error: (error as Error).message })).finally(() => operationControllers.delete(operationId));
+        void options.sendSessionMessage(asyncSessionSend[1], String(body.prompt ?? ""), (text) => emitOperation(operationId, "delta", { text }), controller.signal).then((result) => emitOperation(operationId, "complete", result)).catch((error) => emitOperation(operationId, controller.signal.aborted ? "canceled" : "failed", { error: (error as Error).message })).finally(() => {
+          operationControllers.delete(operationId);
+          if (operationSessionIds.size > 200) {
+            const staleKeys = [...operationSessionIds.keys()].slice(0, 50);
+            for (const k of staleKeys) {
+              if (!operationControllers.has(k)) {
+                operationSessionIds.delete(k);
+                operationRunIds.delete(k);
+              }
+            }
+          }
+        });
         return;
       }
       const sessionSend = requestUrl.pathname.match(/^\/api\/sessions\/([^/]+)\/send$/);
@@ -501,13 +574,49 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       }
       if (requestUrl.pathname === "/api/automations" && req.method === "POST") {
         const body = await readJson(req);
-        const id = String(body.id);
-        if (!id || !body.projectId || !body.prompt) throw new Error("Automation id, projectId and prompt are required");
-        options.config.automations = { ...(options.config.automations ?? {}), [id]: { id, label: String(body.label ?? id), enabled: body.enabled !== false, projectId: String(body.projectId), roleId: body.roleId ? String(body.roleId) : undefined, prompt: String(body.prompt), trigger: body.event ? { type: "event", event: String(body.event) } : { type: "interval", everySeconds: Number(body.everySeconds ?? 3600) } } };
+        const id = String(body.id || `auto_${Date.now()}`);
+        if (!body.projectId || !body.prompt) throw new Error("projectId and prompt are required");
+        options.config.automations = { ...(options.config.automations ?? {}), [id]: { id, label: String(body.label || body.name || id), enabled: body.enabled !== false, projectId: String(body.projectId), roleId: body.roleId ? String(body.roleId) : undefined, prompt: String(body.prompt), trigger: body.event ? { type: "event", event: String(body.event) } : { type: "interval", everySeconds: Number(body.everySeconds ?? 3600) } } };
         await options.saveConfig();
         options.reloadAutomations?.();
         send(res, 201, options.config.automations[id]);
         return;
+      }
+      const automationActionMatch = requestUrl.pathname.match(/^\/api\/automations\/([^/]+)(?:\/(toggle|run))?$/);
+      if (automationActionMatch) {
+        const autoId = decodeURIComponent(automationActionMatch[1]);
+        const subAction = automationActionMatch[2];
+        if (req.method === "DELETE") {
+          if (options.config.automations && options.config.automations[autoId]) {
+            delete options.config.automations[autoId];
+            await options.saveConfig();
+            options.reloadAutomations?.();
+            send(res, 200, { ok: true, removed: autoId });
+            return;
+          }
+          send(res, 404, { error: "Automation not found" });
+          return;
+        }
+        if (req.method === "POST" && subAction === "toggle") {
+          const auto = options.config.automations?.[autoId];
+          if (!auto) { send(res, 404, { error: "Automation not found" }); return; }
+          auto.enabled = auto.enabled === false ? true : false;
+          await options.saveConfig();
+          options.reloadAutomations?.();
+          send(res, 200, { ok: true, enabled: auto.enabled });
+          return;
+        }
+        if (req.method === "POST" && subAction === "run") {
+          const auto = options.config.automations?.[autoId];
+          if (!auto) { send(res, 404, { error: "Automation not found" }); return; }
+          if (options.runAutomation) {
+            await options.runAutomation(autoId);
+            send(res, 200, { ok: true, message: "Automation triggered" });
+            return;
+          }
+          send(res, 200, { ok: true, message: "Trigger dispatched" });
+          return;
+        }
       }
       if (requestUrl.pathname === "/api/providers" && req.method === "POST") {
         const body = await readJson(req);

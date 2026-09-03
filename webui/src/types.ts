@@ -162,6 +162,7 @@ export interface SessionContextInfo {
   task: Task | null;
   childTasks: Task[];
   contextUsage: ContextUsage;
+  activeOperationId?: string | null;
   connection: {
     providerId: string | null;
     label: string;
@@ -172,6 +173,7 @@ export interface SessionContextInfo {
 }
 
 export interface WebState {
+  activeOperations?: Record<string, string>;
   activeConnection: {
     providerId: string | null;
     label: string;

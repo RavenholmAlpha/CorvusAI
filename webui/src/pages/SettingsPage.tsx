@@ -835,8 +835,13 @@ export function SettingsPage({ state, reload }: PageProps) {
   const updateZoom = (nextZoom: number) => {
     setCurrentZoom(nextZoom);
     const scale = nextZoom / 100;
-    (document.documentElement.style as any).zoom = String(scale);
-    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    if (nextZoom === 100) {
+      (document.documentElement.style as any).zoom = "";
+      document.documentElement.style.removeProperty("--ui-zoom");
+    } else {
+      (document.documentElement.style as any).zoom = String(scale);
+      document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    }
     localStorage.setItem("corvus_ui_zoom", String(nextZoom));
     window.dispatchEvent(new Event("storage"));
   };

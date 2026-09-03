@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-import { copyFileSync, existsSync, realpathSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { copyFileSync, existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
@@ -30,7 +30,9 @@ import { acquireOAuthToken } from "./mcp/oauth.js";
 import { createConfigBackedChatModel, createProfileBackedChatModel, createSessionChatModel, resolveModelSettings } from "./runtime.js";
 import { CorvusTui } from "./tui.js";
 import { createBuiltInTools, ToolRegistry } from "./tools/index.js";
-import { setMcpManager, setMemorySearcher, setRoleManager, setProjectMemoryRecorder, setProjectTaskDispatcher, setScopeLeaseCoordinator, setSkillManager, setSubagentTaskChecker, setSubAgentBatchFactory, setSubAgentFactory, setWorkspaceLister, setWorkspaceRegistrar, setWorkspaceSummaryGetter, setWorkspaceUnregistrar } from "./tools/builtin.js";
+import { setCodexTaskDispatcher, setMcpManager, setMemorySearcher, setRoleManager, setProjectMemoryRecorder, setProjectTaskDispatcher, setScopeLeaseCoordinator, setSkillManager, setSubagentTaskChecker, setSubAgentBatchFactory, setSubAgentFactory, setWorkspaceLister, setWorkspaceRegistrar, setWorkspaceSummaryGetter, setWorkspaceUnregistrar } from "./tools/builtin.js";
+import { dispatchCodexTask } from "./codex/bridge.js";
+import { detectCodexCli } from "./codex/detector.js";
 import { ScopeLeaseCoordinator } from "./collaboration.js";
 import { startWebControlPlane } from "./web/server.js";
 import { AutomationScheduler } from "./automation.js";
@@ -334,7 +336,15 @@ Options:
       model: client,
       runner: masterRunner,
       harness: masterHarness,
-      augmentPrompt: skillAugment(process.cwd()),
+      augmentPrompt: async (prompt) => {
+        const base = await skillAugment(process.cwd())(prompt);
+        const projects = runs.listProjects();
+        const projectList = projects.length
+          ? projects.map((p) => `- ${p.name} (id: ${p.id}, path: ${p.path})`).join("\n")
+          : "- (None registered yet)";
+        const codexInfo = await detectCodexCli().catch(() => ({ installed: false, version: undefined }));
+        return base + `\n\n[GLOBAL ORCHESTRATOR WORKSPACE DIRECTIVE]\nCurrently Registered Workspaces:\n${projectList}\n\nExternal Codex CLI Agent Status: ${codexInfo.installed ? `Available (${codexInfo.version || "installed"})` : "Not installed"}\n\nCRITICAL INSTRUCTION FOR PROJECT TASKS:\nYou are the Global Master Orchestrator. When any user request involves reading, creating, modifying, testing, scanning, or executing code in a project workspace or specific folder:\n1. DO NOT execute files or shell commands yourself directly in the master environment.\n2. You MUST use 'dispatch_project_task' (or 'dispatch_codex_task' for OpenAI Codex CLI) to delegate the work to the target project agent.\n3. When the user asks to use Codex or mentions Codex subagents, call 'dispatch_codex_task' with the target projectId. The Codex agent executes headlessly in that project's folder, streaming live thoughts, commands, and file edits into a dedicated subagent session.\n4. If a requested directory path is not listed above, pass its path directly to 'dispatch_project_task' or 'dispatch_codex_task' (it will auto-register as a workspace) or call 'register_workspace'.\n`;
+      },
       ...checkpointHooks,
       customSystemPrompt: `You are the Corvus Global Master Controller (Central Orchestrator).
 You operate at the executive global level and are NOT bound to a single repository or working directory.
@@ -352,28 +362,85 @@ ${Object.values(config.agentRoles ?? {}).map((role) => `   - ${role.id}${role.la
     });
     masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(masterSession.id)), masterSession.id);
 
-    const sessionRuntimes = new Map<string, { agent: CorvusAgent; runner: HarnessRunner }>();
-    const createSessionRuntime = (sessionId: string, providerId: string, modelName: string) => {
-      const target = runs.getSession(sessionId);
-      if (!target) throw new Error("Session not found: " + sessionId);
-      const settings = resolveModelSettings(config, config.providers?.[providerId], modelName);
-      const provider = config.providers?.[providerId];
-      if (!provider) throw new Error("Provider not found: " + providerId);
-      if (!provider.models.includes(modelName) && !provider.modelSettings?.[modelName]) throw new Error("Model is not configured for provider: " + modelName);
-      const sessionConfig = { ...config, endpoint: provider.endpoint, model: modelName, contextWindowTokens: settings.contextWindowTokens, compactionThreshold: Math.min(config.compactionThreshold, Math.floor(settings.contextWindowTokens * 0.7)) };
-      const sessionModel = createSessionChatModel(config, providerId, modelName);
-      const sessionRunner = new HarnessRunner({ config: sessionConfig, model: sessionModel, tools, runs, queue, evidence, events, approvals });
-      const sessionHarness = createCliHarnessAdapter(runs, evidence, approvals, queue, sessionRunner, subagents);
-      const workspace = target.projectId ? runs.getProject(target.projectId)?.path ?? process.cwd() : process.cwd();
-      const sessionAgent = new CorvusAgent({ config: sessionConfig, tools, model: sessionModel, runner: sessionRunner, harness: sessionHarness, augmentPrompt: skillAugment(workspace), ...checkpointHooks });
-      sessionAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
-      const runtime = { agent: sessionAgent, runner: sessionRunner };
-      sessionRuntimes.set(sessionId, runtime);
+    const sessionRuntimes = new Map<string, { agent: CorvusAgent; runner: HarnessRunner; sessionId: string }>();
+    const getSessionRuntime = (target: import("./harness/types.js").SessionRow): { agent: CorvusAgent; runner: HarnessRunner; sessionId: string } => {
+      const existing = sessionRuntimes.get(target.id);
+      if (existing) return existing;
+
+      if (target.providerId && target.model) {
+        const settings = resolveModelSettings(config, config.providers?.[target.providerId], target.model);
+        const provider = config.providers?.[target.providerId];
+        if (provider) {
+          const sessionConfig = { ...config, endpoint: provider.endpoint, model: target.model, contextWindowTokens: settings.contextWindowTokens, compactionThreshold: Math.min(config.compactionThreshold, Math.floor(settings.contextWindowTokens * 0.7)) };
+          const sessionModel = createSessionChatModel(config, target.providerId, target.model);
+          const sessionRunner = new HarnessRunner({ config: sessionConfig, model: sessionModel, tools, runs, queue, evidence, events, approvals });
+          const sessionHarness = createCliHarnessAdapter(runs, evidence, approvals, queue, sessionRunner, subagents);
+          const workspace = target.projectId ? runs.getProject(target.projectId)?.path ?? process.cwd() : process.cwd();
+          const sessionAgent = new CorvusAgent({ config: sessionConfig, tools, model: sessionModel, runner: sessionRunner, harness: sessionHarness, augmentPrompt: skillAugment(workspace), ...checkpointHooks });
+          sessionAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(target.id)), target.id);
+          const runtime = { agent: sessionAgent, runner: sessionRunner, sessionId: target.id };
+          sessionRuntimes.set(target.id, runtime);
+          return runtime;
+        }
+      }
+
+      if (target.projectId === null) {
+        const sRunner = new HarnessRunner({ config, model: client, tools, runs, queue, evidence, events, approvals });
+        const sHarness = createCliHarnessAdapter(runs, evidence, approvals, queue, sRunner, subagents);
+        const sAgent = new CorvusAgent({
+          config,
+          tools,
+          model: client,
+          runner: sRunner,
+          harness: sHarness,
+          augmentPrompt: async (prompt) => {
+            const base = await skillAugment(process.cwd())(prompt);
+            const projects = runs.listProjects();
+            const projectList = projects.length
+              ? projects.map((p) => `- ${p.name} (id: ${p.id}, path: ${p.path})`).join("\n")
+              : "- (None registered yet)";
+            const codexInfo = await detectCodexCli().catch(() => ({ installed: false, version: undefined }));
+            return base + `\n\n[GLOBAL ORCHESTRATOR WORKSPACE DIRECTIVE]\nCurrently Registered Workspaces:\n${projectList}\n\nExternal Codex CLI Agent Status: ${codexInfo.installed ? `Available (${codexInfo.version || "installed"})` : "Not installed"}\n\nCRITICAL INSTRUCTION FOR PROJECT TASKS:\nYou are the Global Master Orchestrator. When any user request involves reading, creating, modifying, testing, scanning, or executing code in a project workspace or specific folder:\n1. DO NOT execute files or shell commands yourself directly in the master environment.\n2. You MUST use 'dispatch_project_task' (or 'dispatch_codex_task' for OpenAI Codex CLI) to delegate the work to the target project agent.\n3. When the user asks to use Codex or mentions Codex subagents, call 'dispatch_codex_task' with the target projectId. The Codex agent executes headlessly in that project's folder, streaming live thoughts, commands, and file edits into a dedicated subagent session.\n4. If a requested directory path is not listed above, pass its path directly to 'dispatch_project_task' or 'dispatch_codex_task' (it will auto-register as a workspace) or call 'register_workspace'.\n`;
+          },
+          ...checkpointHooks,
+          customSystemPrompt: `You are the Corvus Global Master Controller (Central Orchestrator).
+You operate at the executive global level and are NOT bound to a single repository or working directory.
+Your capabilities:
+1. Multi-Workspace Management: Use list_workspaces to discover existing repositories. Use register_workspace to register new project directories.
+2. Task Delegation & Orchestration: When the user asks to inspect, write, test, or modify code in projects:
+   - Use list_workspaces to find target project IDs.
+   - Use dispatch_project_task to assign subtasks to the specialized project subagent.
+   - For multi-project workflows (e.g. frontend + backend), break down instructions and dispatch tasks accordingly.
+3. Universal Architecture & Synthesis: Answer general technical questions, design architectures, aggregate results from completed project tasks, and present clear solutions to the user.
+4. Role Governance: Configured reusable roles:
+${Object.values(config.agentRoles ?? {}).map((role) => `   - ${role.id}${role.label ? ` (${role.label})` : ""}: provider=${role.providerId}${role.systemPrompt ? `; specialty=${role.systemPrompt.slice(0, 200)}` : ""}`).join("\n") || "   - none configured"}
+   Select them with the role argument on task, parallel_tasks, or dispatch_project_task. Use manage_role to inspect or create roles when needed.
+5. Extensible Tooling (MCP & Skills): You can guide or perform conversational installation of MCP servers (configuring .corvus/config.json mcpServers for GitHub, PostgreSQL, SQLite, Fetch, etc.) and create specialized skills in .corvus/skills/<name>/SKILL.md whenever requested.`,
+        });
+        sAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(target.id)), target.id);
+        const runtime = { agent: sAgent, runner: sRunner, sessionId: target.id };
+        sessionRuntimes.set(target.id, runtime);
+        return runtime;
+      }
+
+      const targetProject = runs.getProject(target.projectId) ?? project;
+      const sRunner = new HarnessRunner({ config, model: client, tools, runs, queue, evidence, events, approvals });
+      const sHarness = createCliHarnessAdapter(runs, evidence, approvals, queue, sRunner, subagents);
+      const sAgent = new CorvusAgent({
+        config,
+        tools,
+        model: client,
+        runner: sRunner,
+        harness: sHarness,
+        augmentPrompt: skillAugment(targetProject.path),
+        ...checkpointHooks,
+      });
+      sAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(target.id)), target.id);
+      const runtime = { agent: sAgent, runner: sRunner, sessionId: target.id };
+      sessionRuntimes.set(target.id, runtime);
       return runtime;
     };
-    const runtimeForSession = (target: import("./harness/types.js").SessionRow) => target.providerId && target.model
-      ? sessionRuntimes.get(target.id) ?? createSessionRuntime(target.id, target.providerId, target.model)
-      : target.projectId === null ? { agent: masterAgent, runner: masterRunner } : getProjectAgent(target.projectId);
+    const runtimeForSession = (target: import("./harness/types.js").SessionRow) => getSessionRuntime(target);
 
     const resolveProjectRequest = (prompt: string) => {
       const decision = routeProjectRequest(prompt, runs.listProjects());
@@ -382,11 +449,11 @@ ${Object.values(config.agentRoles ?? {}).map((role) => `   - ${role.id}${role.la
 
     const runtimeForRun = (runId: string) => {
       const run = runs.getRun(runId);
-      const sessionRow = run?.sessionId ? runs.listSessions().find((item) => item.id === run.sessionId) : undefined;
-      if (sessionRow && sessionRow.projectId === null) {
-        return { agent: masterAgent, runner: masterRunner, sessionId: sessionRow.id };
+      const sessionRow = run?.sessionId ? runs.getSession(run.sessionId) : undefined;
+      if (sessionRow) {
+        return getSessionRuntime(sessionRow);
       }
-      return sessionRow?.projectId ? getProjectAgent(sessionRow.projectId) : projectAgents.get(project.id)!;
+      return getSessionRuntime(session);
     };
 
     // Each task has an isolated child session plus a durable parent-child record.
@@ -437,8 +504,14 @@ ${Object.values(config.agentRoles ?? {}).map((role) => `   - ${role.id}${role.la
         if (role?.maxContextTokens !== undefined) { childConfig.contextWindowTokens = role.maxContextTokens; childConfig.compactionThreshold = Math.round(role.maxContextTokens * 0.7); }
         const allowed = role?.allowedTools ? new Set(role.allowedTools) : undefined;
         const denied = new Set(role?.deniedTools ?? []);
-        const childTools = role ? new ToolRegistry(config.permissions) : tools;
-        if (role) childTools.registerMany(tools.list().filter((tool) => (!allowed || allowed.has(tool.name)) && !denied.has(tool.name)));
+        const orchestratorTools = new Set(["dispatch_project_task", "register_workspace", "unregister_workspace", "list_workspaces"]);
+        const childTools = new ToolRegistry(config.permissions);
+        childTools.registerMany(tools.list().filter((tool) => {
+          if (orchestratorTools.has(tool.name)) return false;
+          if (allowed && !allowed.has(tool.name)) return false;
+          if (denied.has(tool.name)) return false;
+          return true;
+        }));
         const rawChildClient = profile ? createProfileBackedChatModel(profile, config) : client;
         const childClient = role ? withModelBudget(rawChildClient, { maxRequests: role.maxRequests, maxPromptTokens: role.maxPromptTokens, maxCompletionTokens: role.maxCompletionTokens }) : rawChildClient;
         const childRunner = new HarnessRunner({ config: childConfig, model: childClient, tools: childTools, runs, queue, evidence, events, approvals });
@@ -489,8 +562,10 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
         if (roleId) { const remaining = (activeRoleTasks.get(roleId) ?? 1) - 1; if (remaining > 0) activeRoleTasks.set(roleId, remaining); else activeRoleTasks.delete(roleId); }
       }
     };
-    setSubAgentFactory(delegateSubagentTask);
-    setSubAgentBatchFactory(async (tasks, parentRunId) => {
+    setSubAgentFactory((prompt, description, parentRunId, profile, role, projectId) => {
+      return delegateSubagentTask(prompt, description, parentRunId, profile, role, undefined, projectId);
+    });
+    setSubAgentBatchFactory(async (tasks, parentRunId, defaultProjectId) => {
       const results: Array<{ result?: string; error?: string; profile?: string }> = new Array(tasks.length);
       let next = 0;
       const workerCount = Math.min(3, tasks.length);
@@ -499,7 +574,7 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
           const index = next++;
           const task = tasks[index];
           try {
-            results[index] = { result: await delegateSubagentTask(task.prompt, task.description, parentRunId, task.profile, task.role), profile: task.role ?? task.profile };
+            results[index] = { result: await delegateSubagentTask(task.prompt, task.description, parentRunId, task.profile, task.role, undefined, task.projectId || defaultProjectId), profile: task.role ?? task.profile };
           } catch (error) {
             results[index] = { error: (error as Error).message };
           }
@@ -523,9 +598,33 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
 
     setProjectTaskDispatcher(async (projectIdOrName, prompt, description, roleId, parentRunId, background) => {
       const projects = runs.listProjects();
-      const target = projects.find((p) => p.id === projectIdOrName || p.name.toLowerCase() === projectIdOrName.toLowerCase());
+      const cleanInput = String(projectIdOrName || "").trim();
+      const normInput = cleanInput.replace(/\\/g, "/").toLowerCase();
+      let target = projects.find((p) => {
+        if (p.id === cleanInput) return true;
+        if (p.name.toLowerCase() === cleanInput.toLowerCase()) return true;
+        const pNorm = (p.path || "").replace(/\\/g, "/").toLowerCase();
+        if (pNorm === normInput) return true;
+        if (pNorm.endsWith("/" + normInput) || normInput.endsWith("/" + pNorm)) return true;
+        const baseName = (p.path || "").split(/[\\/]/).filter(Boolean).pop()?.toLowerCase();
+        if (baseName && baseName === normInput) return true;
+        return false;
+      });
+
+      if (!target && existsSync(cleanInput)) {
+        try {
+          const stat = statSync(cleanInput);
+          if (stat.isDirectory()) {
+            const resolvedPath = resolve(cleanInput);
+            const dirName = basename(resolvedPath) || "Workspace";
+            target = runs.createProject(dirName, resolvedPath);
+            logger.info("Auto-registered directory as workspace", { name: dirName, path: resolvedPath, id: target.id });
+          }
+        } catch {}
+      }
+
       if (!target) {
-        throw new Error(`Workspace project not found: '${projectIdOrName}'. Use list_workspaces to discover valid IDs.`);
+        throw new Error(`Workspace project not found for '${projectIdOrName}'. Registered projects: ${projects.map((p) => `${p.name} (${p.path})`).join(", ")}. Use list_workspaces or register_workspace.`);
       }
       const parentSessionId = subagents.currentParentSessionId() ?? (parentRunId ? runs.getRun(parentRunId)?.sessionId ?? undefined : undefined) ?? masterSession.id;
       if (!background) return await delegateSubagentTask(prompt, description || `Task on ${target.name}`, parentRunId, undefined, roleId, parentSessionId, target.id);
@@ -533,6 +632,42 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
       const running = delegateSubagentTask(prompt, description || `Task on ${target.name}`, parentRunId, undefined, roleId, parentSessionId, target.id, (taskId) => { startedTaskId = taskId; });
       void running.catch((error) => logger.error("Background project task failed", { projectId: target.id, taskId: startedTaskId, error: (error as Error).message }));
       if (!startedTaskId) throw new Error("Background task did not start");
+      return startedTaskId;
+    });
+
+    setCodexTaskDispatcher(async ({ projectId, prompt, description, model, sandbox, parentRunId, background }) => {
+      const parentSessionId = subagents.currentParentSessionId() ?? (parentRunId ? runs.getRun(parentRunId)?.sessionId ?? undefined : undefined) ?? masterSession.id;
+      if (!background) {
+        return await dispatchCodexTask({
+          runs,
+          subagents,
+          projectIdOrPath: projectId,
+          prompt,
+          description,
+          model,
+          sandbox,
+          parentRunId,
+          parentSessionId,
+          timeoutMs: 600000,
+        });
+      }
+      let startedTaskId = "";
+      const running = dispatchCodexTask({
+        runs,
+        subagents,
+        projectIdOrPath: projectId,
+        prompt,
+        description,
+        model,
+        sandbox,
+        parentRunId,
+        parentSessionId,
+        timeoutMs: 600000,
+      });
+      // Look up recently created subagent task for this prompt
+      const runningTask = subagents.list().find((t) => t.prompt === prompt && t.status === "running");
+      startedTaskId = runningTask?.id || ("task_" + Date.now());
+      void running.catch((err) => logger.error("Background Codex task failed", { projectId, error: (err as Error).message }));
       return startedTaskId;
     });
 
@@ -615,13 +750,22 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
       const pluginManagement = new PluginManagementService(getGlobalPluginsRoot(), config, () => saveConfig(config));
       const bundles = new BundleService(getConfigRoot(), config, () => saveConfig(config));
       webControl = await startWebControlPlane({
-        config, runs, approvals, browser, nodes, channelDeliveries, pluginManagement, bundles, indexMemory: (memory) => memoryEngine.index(memory), reloadAutomations: () => automationScheduler?.start(Object.values(config.automations ?? {})), plugins: loadedPlugins, listMcp: () => mcpRuntime.list(), reloadMcp: async () => { mcpResults = await mcpRuntime.reload(config.mcpServers ?? {}); return mcpResults; }, testMcp: (name, server) => mcpRuntime.test(name, server as never), getToolCall: (toolCallId) => queue.getToolCall(toolCallId), events, evidence, db, saveConfig: () => saveConfig(config), port: cliArgs.webPort,
+        config, runs, approvals, browser, nodes, channelDeliveries, pluginManagement, bundles, indexMemory: (memory) => memoryEngine.index(memory), reloadAutomations: () => automationScheduler?.start(Object.values(config.automations ?? {})), runAutomation: async (id: string) => { const a = config.automations?.[id]; if (a) await automationScheduler?.runNow(a); }, plugins: loadedPlugins, listMcp: () => mcpRuntime.list(), reloadMcp: async () => { mcpResults = await mcpRuntime.reload(config.mcpServers ?? {}); return mcpResults; }, testMcp: (name, server) => mcpRuntime.test(name, server as never), getToolCall: (toolCallId) => queue.getToolCall(toolCallId), events, evidence, db, saveConfig: () => saveConfig(config), port: cliArgs.webPort,
         activeProjectId: () => project.id,
         selectProject,
-        spawnSessionTask: async (sessionId, prompt, description, roleId) => { const target=runs.listSessions().find(item=>item.id===sessionId);if(!target)throw new Error("Session not found");return {content:await delegateSubagentTask(prompt,description??"Delegated child task",undefined,undefined,roleId,sessionId,target.projectId??undefined)}; },
-        dispatchSessionMessage: async (sessionId, prompt, roleId) => { const target=runs.listSessions().find(item=>item.id===sessionId);if(!target?.projectId)throw new Error("Bound channel session has no project");const runtime=getProjectAgent(target.projectId);runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)),sessionId);if(roleId)return {content:await delegateSubagentTask(prompt,"Channel bound task",undefined,undefined,roleId,sessionId)};const result=await runtime.agent.send(prompt);return{runId:result.runId,content:result.message.content??""}; },
+        spawnSessionTask: async (sessionId, prompt, description, roleId) => { const target=runs.getSession(sessionId);if(!target)throw new Error("Session not found");return {content:await delegateSubagentTask(prompt,description??"Delegated child task",undefined,undefined,roleId,sessionId,target.projectId??undefined)}; },
+        dispatchSessionMessage: async (sessionId, prompt, roleId) => {
+          const target = runs.getSession(sessionId);
+          if (!target) throw new Error("Session not found: " + sessionId);
+          const runtime = getSessionRuntime(target);
+          runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
+          if (roleId) return { content: await delegateSubagentTask(prompt, "Channel bound task", undefined, undefined, roleId, sessionId) };
+          const result = await runtime.agent.send(prompt);
+          return { runId: result.runId, content: result.message.content ?? "" };
+        },
         dispatchProjectMessage: async (projectId, prompt, roleId) => {
-          const runtime = getProjectAgent(projectId);
+          const targetSession = runs.getLatestSession(projectId) ?? runs.createSession(projectId, "Project channel conversation");
+          const runtime = getSessionRuntime(targetSession);
           if (roleId) return { content: await delegateSubagentTask(prompt, "Channel task", undefined, undefined, roleId, runtime.sessionId), pendingApprovals: 0 };
           const result = await runtime.agent.send(prompt);
           return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
@@ -633,44 +777,34 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
         resumeRun: async (runId) => { await runtimeForRun(runId).runner.resumeRun(runId); },
         getContextUsage: (sessionId, projectId) => {
           if (sessionId) {
-            const target = runs.listSessions().find((item) => item.id === sessionId);
-            if (target && target.projectId === null) {
-              masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
-              return masterAgent.contextUsage();
+            const target = runs.getSession(sessionId);
+            if (target) {
+              const runtime = getSessionRuntime(target);
+              runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
+              return runtime.agent.contextUsage();
             }
           }
           const pid = projectId ?? project.id;
-          const runtime = getProjectAgent(pid);
-          if (sessionId) {
-            runtime.agent.loadSessionHistory(
-              toChatMessages(runs.listSessionMessages(sessionId)),
-              sessionId
-            );
+          const targetSession = runs.getLatestSession(pid);
+          if (targetSession) {
+            const runtime = getSessionRuntime(targetSession);
+            return runtime.agent.contextUsage();
           }
-          return runtime.agent.contextUsage();
+          return agent.contextUsage();
         },
         switchSessionModel: (sessionId, providerId, modelName) => {
+          sessionRuntimes.delete(sessionId);
           const settings = resolveModelSettings(config, config.providers?.[providerId], modelName);
-          createSessionRuntime(sessionId, providerId, modelName);
           const updated = runs.setSessionModel(sessionId, providerId, modelName, settings.contextWindowTokens);
           if (!updated) throw new Error("Session not found: " + sessionId);
+          const target = runs.getSession(sessionId);
+          if (target) getSessionRuntime(target);
           return updated;
         },
         sendSessionMessage: async (sessionId, prompt, onChunk, signal) => {
           const target = runs.getSession(sessionId);
           if (!target) throw new Error("Session not found: " + sessionId);
-          if (target.providerId && target.model) {
-            const selectedRuntime = runtimeForSession(target);
-            selectedRuntime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
-            const result = await selectedRuntime.agent.send(prompt, { onChunk, signal });
-            return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
-          }
-          if (target.projectId === null) {
-            masterAgent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
-            const result = await masterAgent.send(prompt, { onChunk, signal });
-            return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };
-          }
-          const runtime = getProjectAgent(target.projectId);
+          const runtime = getSessionRuntime(target);
           runtime.agent.loadSessionHistory(toChatMessages(runs.listSessionMessages(sessionId)), sessionId);
           const result = await runtime.agent.send(prompt, { onChunk, signal });
           return { runId: result.runId, content: result.message.content ?? "", pendingApprovals: result.pendingApprovals?.length ?? 0 };

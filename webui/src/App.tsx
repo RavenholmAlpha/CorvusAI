@@ -125,28 +125,15 @@ function AppContent() {
 
   useEffect(() => {
     const scale = zoom / 100;
-    (document.documentElement.style as any).zoom = String(scale);
-    document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    if (zoom === 100) {
+      (document.documentElement.style as any).zoom = "";
+      document.documentElement.style.removeProperty("--ui-zoom");
+    } else {
+      (document.documentElement.style as any).zoom = String(scale);
+      document.documentElement.style.setProperty("--ui-zoom", String(scale));
+    }
     localStorage.setItem("corvus_ui_zoom", String(zoom));
   }, [zoom]);
-
-  // Global Keyboard Shortcuts for Zoom
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === "=" || e.key === "+")) {
-        e.preventDefault();
-        setZoom((prev) => Math.min(180, prev + 5));
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === "-" || e.key === "_")) {
-        e.preventDefault();
-        setZoom((prev) => Math.max(60, prev - 5));
-      } else if ((e.ctrlKey || e.metaKey) && (e.key === "0" || e.key === "Digit0")) {
-        e.preventDefault();
-        setZoom(100);
-      }
-    };
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
 
   const startSidebarResize = (e: React.MouseEvent) => {
     e.preventDefault();

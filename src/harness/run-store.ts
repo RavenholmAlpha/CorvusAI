@@ -662,7 +662,10 @@ export class RunStore {
 
   appendMessage(input: AppendMessageInput): MessageRow {
     return this.db.transaction(() => {
-      const metadata = input.metadata ? serializeDurableJsonObject(input.metadata, "message metadata") : null;
+      const cleanMetadata = input.metadata
+        ? Object.fromEntries(Object.entries(input.metadata).filter(([_, v]) => v !== undefined))
+        : null;
+      const metadata = cleanMetadata ? serializeDurableJsonObject(cleanMetadata, "message metadata") : null;
       const message: MessageRow = {
         id: newId("msg"),
         runId: input.runId,

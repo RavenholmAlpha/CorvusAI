@@ -100,7 +100,16 @@ describe("local web control plane", () => {
     await reader.cancel();
     expect(streamed).toContain("stream:");
     expect(streamed).toContain("hello stream");
+    const activeOpCheck = await fetch(web.url + "api/sessions/" + session.id + "/active-operation").then((response) => response.json());
+    expect(activeOpCheck).toMatchObject({ active: expect.any(Boolean) });
+    const contextCheck = await fetch(web.url + "api/sessions/" + session.id + "/context").then((response) => response.json());
+    expect(contextCheck).toHaveProperty("activeOperationId");
+    const cancelRes = await fetch(web.url + "api/sessions/" + session.id + "/cancel", { method: "POST" });
+    expect(cancelRes.status).toBe(200);
+    const cancelJson = await cancelRes.json();
+    expect(cancelJson).toMatchObject({ ok: true });
     const after = await fetch(web.url + "api/state").then((response) => response.json());
+    expect(after).toHaveProperty("activeOperations");
     expect(after.projects).toEqual([expect.objectContaining({ name: "Vault" })]);
     expect(after.mainProviderId).toBe("openai");
     expect(after.roles.architect.providerId).toBe("openai");
