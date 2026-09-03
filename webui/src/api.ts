@@ -1,22 +1,24 @@
 import type { WebState } from "./types";
 
+export let webToken = "";
+
 export function getWebToken(): string {
   if (typeof window === "undefined") return "";
   return sessionStorage.getItem("corvus-token") || localStorage.getItem("corvus-token") || "";
 }
 
 export function setWebToken(token: string): void {
+  webToken = token;
   if (typeof window === "undefined") return;
   sessionStorage.setItem("corvus-token", token);
   localStorage.setItem("corvus-token", token);
-  webToken = token;
 }
 
 export function clearWebToken(): void {
+  webToken = "";
   if (typeof window === "undefined") return;
   sessionStorage.removeItem("corvus-token");
   localStorage.removeItem("corvus-token");
-  webToken = "";
 }
 
 if (typeof window !== "undefined") {
@@ -28,10 +30,10 @@ if (typeof window !== "undefined") {
       cleanUrl.searchParams.delete("token");
       window.history.replaceState(null, "", cleanUrl.toString());
     } catch {}
+  } else {
+    webToken = getWebToken();
   }
 }
-
-export let webToken = getWebToken();
 
 function secured(path: string): string {
   const token = getWebToken();

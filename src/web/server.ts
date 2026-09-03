@@ -124,7 +124,7 @@ function capabilityPages(features: string[]): Array<{ id: string; enabled: boole
   return ["overview","chat","projects","agents","tasks","approvals","memory","timeline","skills","automations","channels","routing","browser","nodes","integrations","installation","secrets","team","settings"].map((id)=>({id,enabled:!required[id]||features.includes(required[id]),...(required[id]?{feature:required[id]}:{})}));
 }
 
-export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{ url: string; accessUrl: string; close: () => Promise<void> }> {
+export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{ url: string; accessUrl: string; port: number; host: string; close: () => Promise<void> }> {
   const authStore = options.db ? new WebAuthStore(options.db) : null;
   const userStore = options.db ? new UserStore(options.db) : null;
   const persistentToken = authStore?.getPersistentToken();
@@ -946,6 +946,8 @@ export function startWebControlPlane(options: WebControlPlaneOptions): Promise<{
       resolve({
         url: cleanUrl,
         accessUrl,
+        port: actualPort,
+        host,
         close: () => new Promise((done, fail) => { unsubscribeRuntimeEvents?.(); server.closeAllConnections(); server.close((error) => error ? fail(error) : done()); }),
       });
     });

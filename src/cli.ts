@@ -878,7 +878,21 @@ Your mission is to execute the delegated task thoroughly and report the outcome 
           return { resumed: remaining.length === 0, runId: approval.runId, sessionId: runs.getRun(approval.runId)?.sessionId ?? null };
         },
       });
-      process.stdout.write("Corvus WebUI available at " + webControl.accessUrl + "\n");
+      if (webControl.host === "0.0.0.0") {
+        process.stdout.write(`Corvus WebUI listening on 0.0.0.0:${webControl.port} (available at http://<server-ip>:${webControl.port}/ or http://127.0.0.1:${webControl.port}/)\n`);
+        if (!authStore.isInitialized()) {
+          process.stdout.write(`Temporary token access URL: ${webControl.accessUrl}\n`);
+          process.stdout.write(`[Notice] No persistent password configured yet in database.\n`);
+          process.stdout.write(`To set a permanent password: run "corvus password set <password>"\n`);
+        } else {
+          process.stdout.write(`[Security] Protected by persistent database password. Visit http://<server-ip>:${webControl.port}/ to login.\n`);
+        }
+      } else {
+        process.stdout.write("Corvus WebUI available at " + webControl.accessUrl + "\n");
+        if (!authStore.isInitialized()) {
+          process.stdout.write(`[Tip] To set a permanent password: run "corvus password set <password>"\n`);
+        }
+      }
     }
 
     if (cliArgs.webOnly) {
