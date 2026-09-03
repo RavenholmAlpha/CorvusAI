@@ -257,7 +257,7 @@ export function LoginPage({ onLogin }: { onLogin: () => void }) {
         {/* Footer Info */}
         <div style={{ textAlign: "center", borderTop: "1px solid var(--border-dark)", paddingTop: "12px" }}>
           <small style={{ color: "var(--text-dim)", fontFamily: "var(--font-mono)", fontSize: "11px" }}>
-            Corvus Control Plane · Web Engine 0.3.1 · Safe for Public Servers
+            Corvus Control Plane · Web Engine 0.3.3 · Safe for Public Servers
           </small>
         </div>
       </div>

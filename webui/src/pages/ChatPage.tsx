@@ -343,6 +343,7 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   };
 
   const activeSessionRef = useRef(selected);
+  const prevSelectedRef = useRef<string>("");
 
   const loadSessions = async (preferredSelected?: string) => {
     try {
@@ -451,10 +452,6 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
           runId: item.runId || prev.runId,
           activity: [...prev.activity, { type: item.type, createdAt: item.createdAt, runId: item.runId }].slice(-20),
         }));
-        if (activeSessionRef.current === targetSessionId) {
-          void loadMessages(targetSessionId);
-          void reload();
-        }
       } catch {}
     });
 
@@ -537,14 +534,19 @@ export function ChatPage({ state, reload, onToggleSidebar }: PageProps) {
   useEffect(() => {
     if (!selected) {
       setMessages([]);
+      prevSelectedRef.current = "";
       return;
     }
     activeSessionRef.current = selected;
 
-    // Immediately clear message state when switching sessions so old messages never leak or flicker
-    setMessages([]);
-    void loadMessages(selected);
-    void loadSessionContext(selected);
+    const isDifferentSession = prevSelectedRef.current !== selected;
+    if (isDifferentSession) {
+      prevSelectedRef.current = selected;
+      // Immediately clear message state ONLY when switching sessions so old messages never leak or flicker
+      setMessages([]);
+      void loadMessages(selected);
+      void loadSessionContext(selected);
+    }
 
     // Auto-reconnect to active operation if this session has a turn currently running
     void (async () => {

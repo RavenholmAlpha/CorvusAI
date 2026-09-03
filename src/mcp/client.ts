@@ -68,7 +68,7 @@ export class McpClient {
     await this.request("initialize", {
       protocolVersion: "2024-11-05",
       capabilities: {},
-      clientInfo: { name: "corvus", version: "0.3.1" },
+      clientInfo: { name: "corvus", version: "0.3.3" },
     });
     await this.notify("notifications/initialized");
   }

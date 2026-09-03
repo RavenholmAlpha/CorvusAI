@@ -26,7 +26,7 @@ CorvusAI 将终端界面、本地鉴权 WebUI、SQLite 持久化状态、专家�
 npm Registry 包暂未发布。当前请直接安装已经验证过的 GitHub Release，无需克隆仓库：
 
 ```bash
-npm install --global https://github.com/RavenholmAlpha/CorvusAI/releases/download/v0.3.1/ravenholmalpha-corvus-0.3.1.tgz
+npm install --global https://github.com/RavenholmAlpha/CorvusAI/releases/download/v0.3.3/ravenholmalpha-corvus-0.3.3.tgz
 ```
 
 ```bash
@@ -34,7 +34,7 @@ corvus --version
 corvus
 ```
 
-当前版本：[v0.3.1](https://github.com/RavenholmAlpha/CorvusAI/releases/tag/v0.3.1)。
+当前版本：[v0.3.3](https://github.com/RavenholmAlpha/CorvusAI/releases/tag/v0.3.3)。
 
 > 当 `@ravenholmalpha/corvus` 发布到 npm 后，也可以使用 `npm install -g @ravenholmalpha/corvus` 或 `npx @ravenholmalpha/corvus`。
 

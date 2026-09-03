@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { eventUrl, getRuntimeCapabilities, getState, type RuntimeCapabilities } from "./api";
 import type { WebState } from "./types";
 import { TapeDeckReels, ToastContainer, ZoomControl, toast } from "./components";
@@ -172,7 +172,7 @@ function AppContent() {
     document.documentElement.style.setProperty("--sidebar-width", "240px");
   };
 
-  const reload = async () => {
+  const reload = useCallback(async () => {
     try {
       const [nextState, nextCapabilities] = await Promise.all([getState(), getRuntimeCapabilities()]);
       setState(nextState);
@@ -188,7 +188,7 @@ function AppContent() {
         toast.error(msg);
       }
     }
-  };
+  }, []);
 
   const handleLogout = () => {
     clearWebToken();

@@ -1,6 +1,6 @@
 {
   "name": "@ravenholmalpha/corvus",
-  "version": "0.3.1",
+  "version": "0.3.3",
   "description": "Corvus AI agent orchestration platform with durable runs, roles, skills, MCP, memory, TUI, and WebUI.",
   "type": "module",
   "exports": {
